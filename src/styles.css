@@ -25,7 +25,8 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 150px; }
+@media (max-width: 900px) { html { scroll-padding-top: 0; } }
 body {
   margin: 0;
   background:
@@ -102,11 +103,13 @@ body:not(.live) .power { animation: breathe 2.4s ease-in-out infinite; }
 .cables { position: absolute; inset: 0; pointer-events: none; z-index: 10; overflow: visible; }
 .cable { fill: none; stroke-width: 4.5; stroke-linecap: round; opacity: 0.92; }
 .cable-shadow { fill: none; stroke: rgba(0, 0, 0, 0.45); stroke-width: 7; transform: translate(1.5px, 3px); stroke-linecap: round; }
-.cable-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
-.cable-g:hover .cable { stroke-width: 6; opacity: 1; }
+.cable-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: none; cursor: pointer; }
+/* cables are click-through so they never steal clicks from controls; hold Alt to grab one */
+.rack.cable-edit .cable-hit { pointer-events: stroke; }
+.rack.cable-edit .cable-g .cable { stroke-dasharray: 10 5; }
+.rack.cable-edit .cable-g:hover .cable { stroke-width: 7; opacity: 1; stroke-dasharray: none; }
 .cable.temp { stroke-dasharray: 6 6; opacity: 0.8; }
 .rack.cables-faded .cable-g { opacity: 0.16; }
-.rack.cables-faded .cable-hit { pointer-events: none; }
 
 .module {
   position: relative;
@@ -144,16 +147,18 @@ body:not(.live) .power { animation: breathe 2.4s ease-in-out infinite; }
 }
 .patch-sep { width: 1px; align-self: stretch; background: rgba(255, 255, 255, 0.08); margin: 0 6px; }
 
-/* module placement: Shape and Filter stack beside the tall Wingie */
+/* module placement: Divide and LFO stack beside the Kastle,
+   Shape and Filter stack beside the tall Wingie */
 .rack { grid-auto-flow: row dense; }
-.kastle { grid-column: span 9; }
-.util { grid-column: span 3; }
+.kastle { grid-column: 1 / span 9; grid-row: span 2; }
+.util { grid-column: 10 / span 3; }
+.lfo { grid-column: 10 / span 3; }
 .shape { grid-column: 1 / span 3; }
 .wingie { grid-column: 4 / span 9; grid-row: span 2; }
 .filter { grid-column: 1 / span 3; }
-.color { grid-column: span 3; }
-.space { grid-column: span 6; }
-.master { grid-column: span 3; }
+.voice { grid-column: span 5; }
+.color { grid-column: span 2; }
+.space { grid-column: span 5; }
 
 /* --------------------------------------------------------------------- knob */
 .knob { display: flex; flex-direction: column; align-items: center; width: 64px; user-select: none; -webkit-user-select: none; }
@@ -253,12 +258,21 @@ body.bpm-locked .kastle [data-knob="c.rate"] { opacity: 0.4; }
 .filter { --acc: var(--teal); }
 .color { --acc: var(--orange); }
 .space { --acc: var(--violet); }
-.master { --acc: var(--gold); }
+.lfo { --acc: #58a6e8; }
+.voice { --acc: #c4d65a; }
+.seg.wrap { flex-wrap: wrap; width: auto; }
+.wave-preview { width: 120px; height: 44px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; }
+.wave-preview.big { width: 100%; max-width: 260px; height: 64px; }
+.voice-top { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.voice-routing { display: flex; flex-direction: column; gap: 8px; }
+.top-master { display: flex; align-items: center; gap: 8px; --acc: var(--gold); }
+.top-master .knob { width: 54px; }
+.top-master .vu { height: 46px; }
 body.echo-synced .space [data-knob="d.time"] { opacity: 0.4; }
+body.lfo-synced .lfo [data-knob="l.rate"] { opacity: 0.4; }
 .vu { display: flex; gap: 6px; height: 70px; padding: 0 6px; }
 .vu i { width: 10px; background: rgba(255, 255, 255, 0.06); border-radius: 3px; position: relative; overflow: hidden; }
 .vu b { position: absolute; inset: 0; background: linear-gradient(0deg, var(--teal), var(--gold) 70%, var(--red)); transform-origin: bottom; transform: scaleY(0); }
-.master .mod-body { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
 
 /* ------------------------------------------------------------------- wingie */
 .wingie {
@@ -329,14 +343,15 @@ body.echo-synced .space [data-knob="d.time"] { opacity: 0.4; }
 /* --------------------------------------------------------------- responsive */
 @media (max-width: 1280px) {
   .rack { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .kastle { grid-column: span 6; }
-  .util { grid-column: span 2; }
-  .shape { grid-column: span 4; }
-  .wingie { grid-column: span 6; grid-row: auto; }
+  .kastle { grid-column: span 6; grid-row: auto; }
+  .util { grid-column: span 3; }
+  .lfo { grid-column: span 3; }
+  .shape { grid-column: span 3; }
   .filter { grid-column: span 3; }
-  .color { grid-column: span 3; }
+  .wingie { grid-column: span 6; grid-row: auto; }
+  .voice { grid-column: span 6; }
+  .color { grid-column: span 2; }
   .space { grid-column: span 4; }
-  .master { grid-column: span 2; }
 }
 @media (max-width: 900px) {
   .rack { grid-template-columns: minmax(0, 1fr); gap: 12px; }
@@ -345,6 +360,7 @@ body.echo-synced .space [data-knob="d.time"] { opacity: 0.4; }
   .wingie-body { grid-template-columns: minmax(0, 1fr); }
   .w-center { order: -1; }
   #scope { width: 100%; margin-left: 0; order: 10; }
+  .top-master { order: 11; }
   .topbar { position: static; }
 }
 @media (max-width: 520px) {

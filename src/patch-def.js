@@ -15,6 +15,9 @@ export const OUTPUTS = {
   'w.trigL': { label: 'Trig L', title: 'Wingie left threshold gate' },
   'w.trigR': { label: 'Trig R', title: 'Wingie right threshold gate' },
   'w.env': { label: 'Env', title: 'Wingie output envelope follower' },
+  'o.out': { label: 'Out', title: 'Voice oscillator (audio)' },
+  'o.env': { label: 'Env', title: 'Voice envelope' },
+  'l.out': { label: 'LFO', title: 'LFO output (0..1)' },
 };
 
 export const INPUTS = {
@@ -31,6 +34,12 @@ export const INPUTS = {
   's.fold': { label: 'Fold', title: 'Wavefolder amount CV' },
   'f.lp': { label: 'LP', title: 'Low-pass cutoff CV' },
   'f.hp': { label: 'HP', title: 'High-pass cutoff CV' },
+  'k.wave': { label: 'Wave', title: 'Kastle wavetable morph CV' },
+  'o.pitch': { label: 'Pitch', title: 'Transposes the voice, quantised to the key' },
+  'o.wave': { label: 'Wave', title: 'Voice waveform morph CV' },
+  'o.pwm': { label: 'PWM', title: 'Pulse width modulation' },
+  'o.gate': { label: 'Gate', title: 'Strikes the voice on rising edges (Trigger: Gate in)' },
+  'l.rate': { label: 'Rate', title: 'LFO rate CV (free mode)' },
 };
 
 export const CABLE_COLORS = ['#e8b64c', '#e2574c', '#46b3a8', '#8f7cf0', '#e6e1d3', '#f08a3c', '#58a6e8', '#c4d65a'];

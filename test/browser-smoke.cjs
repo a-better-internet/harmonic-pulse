@@ -39,6 +39,22 @@ const { chromium } = require('playwright');
   await page.dblclick('.jack[data-port="f.hp"]');
   check((await cables()) === before + 1, 'double-click unplugs');
 
+  // Alt-click on a cable unplugs it; a plain click passes through
+  const mid = await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const path = document.querySelector('.cable-g .cable-hit');
+    const pt = path.getPointAtLength(path.getTotalLength() * 0.5);
+    const r = document.querySelector('#rack').getBoundingClientRect();
+    return { x: pt.x + r.left, y: pt.y + r.top };
+  });
+  const n0 = await cables();
+  await page.mouse.click(mid.x, mid.y);
+  check((await cables()) === n0, 'plain click on a cable does not unplug it');
+  await page.keyboard.down('Alt');
+  await page.mouse.click(mid.x, mid.y);
+  await page.keyboard.up('Alt');
+  check((await cables()) === n0 - 1, 'Alt-click unplugs a cable');
+
   // Wingie keys: replace then shift-append
   const left = page.locator('.w-side[data-ch="0"]');
   await left.locator('.w-key[data-i="2"]').click();
@@ -65,13 +81,31 @@ const { chromium } = require('playwright');
   const v1 = await page.locator('[data-knob="f.lp"] .knob-dial').getAttribute('aria-valuenow');
   check(Number(v1) < Number(v0), 'arrow keys move a knob');
 
+  // round 2 controls
+  await page.selectOption('#kit', '2');
+  await page.locator('#lfo-shape button').nth(5).click();
+  await page.selectOption('#voice-src', '2');
+  await page.locator('[data-knob="o.lvlD"] .knob-dial').focus();
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(600);
+  const voiceTxt = await page.locator('#voice-readout').textContent();
+  check(/Hz/.test(voiceTxt), 'voice readout shows a pitch: ' + voiceTxt);
+  const inked = await page.evaluate(() => {
+    const c = document.querySelector('#v-wave-view');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+    return n;
+  });
+  check(inked > 100, 'voice waveform preview is drawn');
+  check((await page.locator('.module').count()) === 9, 'nine modules on the rack');
+
   // every factory preset
   const opts = await page.locator('#preset option').evaluateAll((os) => os.map((o) => o.value).filter((v) => v.startsWith('f:')));
   for (const v of opts) {
     await page.selectOption('#preset', v);
     await page.waitForTimeout(500);
   }
-  check(opts.length >= 6, `loaded ${opts.length} presets`);
+  check(opts.length >= 10, `loaded ${opts.length} presets`);
   await page.selectOption('#preset', 'f:0');
   await page.click('#random');
   await page.waitForTimeout(500);

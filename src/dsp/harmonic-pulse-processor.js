@@ -29,12 +29,14 @@ const SOURCES = [
   'c.clk', 'c.tri', 'c.step',
   'u.div2', 'u.div3', 'u.div4', 'u.div8', 'u.drift',
   'w.trigL', 'w.trigR', 'w.env',
+  'o.out', 'o.env', 'l.out',
 ];
 const DESTS = [
   'k.trig', 'k.drum', 'k.pitch', 'k.decay',
   'c.rate', 'c.stepclk',
   'w.noteL', 'w.noteR', 'w.adv', 'w.decay',
   's.fold', 'f.lp', 'f.hp',
+  'k.wave', 'o.pitch', 'o.wave', 'o.pwm', 'o.gate', 'l.rate',
 ];
 const AMT_KEYS = DESTS.map((d) => 'amt.' + d);
 const SRC = Object.fromEntries(SOURCES.map((n, i) => [n, i]));
@@ -64,40 +66,60 @@ const WAVETABLE = (() => {
   for (let i = 129; i < 256; i++) wt[i] = wt[256 - i];
   return wt;
 })();
-const FLASH_SIZE = 16384 + 512;
+// The firmware's writeWave(): 0 sine, 1 triangle, 2 square, 3 sawtooth. Only
+// sine is ever used by the stock build; the others (plus the Chebyshev tables
+// from bastlAttinySamples) are offered here as the WAVE morph.
+function firmwareWaves(chebs) {
+  const tri = new Uint8Array(256), saw = new Uint8Array(256), sq = new Uint8Array(256);
+  for (let i = 0; i < 128; i++) tri[i] = i * 2;
+  for (let i = 128, v = 255; i < 256; i++, v -= 2) tri[i] = v;
+  for (let i = 0; i < 256; i++) { saw[i] = i; sq[i] = i < 128 ? 255 : 1; }
+  const waves = [WAVETABLE, tri, saw, sq];
+  for (const c of chebs || []) {
+    const t = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) t[i] = (c[i] | 0) + 128;
+    waves.push(t);
+  }
+  return waves;
+}
 
-function buildFlash(tables) {
-  // Lay the sample tables out back to back like PROGMEM, then fill the rest
-  // with deterministic pseudo-random "program bytes": the firmware's NOISE mode
-  // can read far past the end of its table when DECAY is low.
-  const flash = new Int8Array(FLASH_SIZE);
-  const layout = {};
+const MIN_FLASH = 16384 + 512;
+const STOCK_KIT = ['TR_HH', 'KICK2', 'SNARE2', 'TR_CLAP'];
+
+// Lay a kit's four sample slots (hat, kick, snare, clap) out back to back like
+// PROGMEM, then fill the rest with deterministic pseudo-random "program bytes":
+// the firmware's NOISE mode can read far past the end of its table.
+function buildFlash(samples, slots) {
+  const tables = slots.map((n) => samples[n] || samples[STOCK_KIT[0]] || [0]);
+  const total = tables.reduce((a, t) => a + t.length, 0);
+  const flash = new Int8Array(Math.max(MIN_FLASH, total + 9000));
+  const t = [];
   let off = 0;
-  for (const t of tables) {
-    layout[t.name] = { off, len: t.data.length };
-    for (let i = 0; i < t.data.length && off + i < FLASH_SIZE; i++) flash[off + i] = t.data[i];
-    off += t.data.length;
+  for (const data of tables) {
+    t.push({ off, len: data.length });
+    for (let i = 0; i < data.length; i++) flash[off + i] = data[i];
+    off += data.length;
   }
   let seed = 0x2f6b;
-  for (let i = off; i < FLASH_SIZE; i++) {
+  for (let i = off; i < flash.length; i++) {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     // AVR opcodes are word-aligned and biased toward a few prefixes.
     flash[i] = ((i & 1) ? (seed >> 16) & 0x9f : (seed >> 8) & 0xff) << 24 >> 24;
   }
-  return { flash, layout };
+  return { flash, t };
 }
 
 class KastleChip {
-  constructor(sr, tables) {
+  constructor(sr, samples, kits, chebs) {
     this.sr = sr;
-    const { flash, layout } = buildFlash(tables);
-    this.flash = flash;
-    const pick = (name, fallback) => layout[name] || layout[fallback] || { off: 0, len: 1 };
-    this.tHH = pick('TR_HH');
-    this.tKick = pick('KICK2', 'TR_HH');
-    this.tSnare = pick('SNARE2', 'TR_HH');
-    this.tClap = pick('TR_CLAP', 'TR_HH');
-    this.wt = WAVETABLE;
+    const kitList = kits && kits.length ? kits : [STOCK_KIT];
+    this.kits = kitList.map((slots) => buildFlash(samples || {}, slots));
+    this.kit = -1;
+    this.setKit(0);
+    this.waves = firmwareWaves(chebs);
+    this.wt = new Uint8Array(WAVETABLE);
+    this.wavePos = 0;
+    this.hits = 0; this.accent = false;
 
     this.analog = new Int32Array(4); // the 8-bit ADC readings
     this.target = new Float64Array(4); // continuous "voltages" at the pins (0..255)
@@ -125,6 +147,26 @@ class KastleChip {
     this.lpA = 1 - Math.exp(-TAU * 7000 / sr);
     this.lpA7 = 1 - Math.exp(-TAU * 12000 / sr);
     this.hpR = Math.exp(-TAU * 14 / sr);
+  }
+
+  setKit(i) {
+    i = clamp(i | 0, 0, this.kits.length - 1);
+    if (i === this.kit) return;
+    this.kit = i;
+    const k = this.kits[i];
+    this.flash = k.flash;
+    [this.tHH, this.tKick, this.tSnare, this.tClap] = k.t;
+  }
+
+  // pos 0..1 sweeps through the tables, crossfading neighbours.
+  setWave(pos) {
+    if (Math.abs(pos - this.wavePos) < 0.002) return;
+    this.wavePos = pos;
+    const x = clamp(pos, 0, 1) * (this.waves.length - 1);
+    const i0 = Math.min(this.waves.length - 2, Math.floor(x));
+    const f = x - i0;
+    const a = this.waves[i0], b = this.waves[i0 + 1];
+    for (let i = 0; i < 256; i++) this.wt[i] = Math.round(a[i] + (b[i] - a[i]) * f);
   }
 
   boot() {
@@ -169,8 +211,9 @@ class KastleChip {
   }
 
   trigger(a, b) {
-    if (Math.abs(a - b) === 1) { this.dv = 128; this.dv2 = 255; }
-    else { this.dv = 255; this.dv2 = 150; }
+    if (Math.abs(a - b) === 1) { this.dv = 128; this.dv2 = 255; this.accent = true; }
+    else { this.dv = 255; this.dv2 = 150; this.accent = false; }
+    this.hits++;
   }
 
   trigDetect() {
@@ -466,13 +509,18 @@ class Wingie {
     const f = side.freq;
     const g = side.gainT;
     g.fill(1);
+    // enhancements: Stretch bends partial ratios (r^(1+x)), Spread detunes L/R
+    const ex = 1 + clamp(P['w.stretch'], -1, 1) * 0.25;
+    const st = (r) => (ex === 1 ? r : Math.pow(r, ex));
+    const spreadCents = clamp(P['w.spread'], 0, 1) * 40 * (ch ? 0.5 : -0.5);
+    const detune = Math.pow(2, spreadCents / 1200);
     if (m === W_POLY || m === W_RATIO) {
       const notes = m === W_POLY ? s.poly[ch] : s.ratioNotes[ch];
       for (let v = 0; v < 3; v++) {
         const base = this.noteFreq(notes[v] + semis, a3, tun);
         for (let k = 0; k < 3; k++) {
           const i = v * 3 + k;
-          f[i] = base * (m === W_POLY ? k + 1 : s.ratios[i]);
+          f[i] = base * st(m === W_POLY ? k + 1 : s.ratios[i]);
         }
       }
       side.note = notes[0] + semis;
@@ -482,30 +530,36 @@ class Wingie {
       side.note = n;
       const base = this.noteFreq(n, a3, tun);
       for (let i = 0; i < N_RES; i++) {
-        if (m === W_STRING) f[i] = base * (i + 1);
-        else { const b = i + 1.5; f[i] = base * BAR_FACTOR * b * b; }
+        if (m === W_STRING) f[i] = base * st(i + 1);
+        else { const b = i + 1.5; f[i] = base * st(BAR_FACTOR * b * b); }
       }
     } else {
       const bank = clamp(s.oct[ch] + 1, 0, 2);
       const ratio = Math.pow(2, semis / 12);
+      const cave = s.cave[ch][bank];
+      const ref = Math.min(...cave);
       for (let i = 0; i < N_RES; i++) {
-        f[i] = s.cave[ch][bank][i] * ratio;
+        f[i] = ref * st(cave[i] / ref) * ratio;
         g[i] = s.caveMute[ch][bank][i] ? 0 : 1;
       }
       side.note = -1;
     }
     const fmax = Math.min(16000, this.sr * 0.45);
     for (let i = 0; i < N_RES; i++) {
-      f[i] = clamp(f[i], 16, fmax);
+      f[i] = clamp(f[i] * detune, 16, fmax);
       if (f[i] >= fmax) g[i] = 0; // nothing above Nyquist-ish
     }
   }
 
   // Block-rate coefficient + anti-feedback update (modalBlockSize = 32)
-  updateCoeffs(ch, t60, guardOn, energyLimit, rhoGuard) {
+  // damp (enhancement): partials above ~300 Hz decay faster, like wood or felt.
+  updateCoeffs(ch, t60, guardOn, energyLimit, rhoGuard, damp) {
     const side = this.sides[ch];
-    const rhoUser = Math.pow(0.001, 1 / (t60 * this.sr));
+    const rhoFlat = Math.pow(0.001, 1 / (t60 * this.sr));
     for (let i = 0; i < N_RES; i++) {
+      const rhoUser = damp > 0.001
+        ? Math.pow(0.001, 1 / (t60 * clamp(Math.pow(300 / side.freq[i], damp * 1.5), 0.03, 1) * this.sr))
+        : rhoFlat;
       const th = TAU * side.freq[i] / this.sr;
       side.c[i] = Math.cos(th);
       side.s[i] = Math.sin(th);
@@ -562,6 +616,108 @@ function cubicnl(x) {
 // ---------------------------------------------------------------------------
 // Filters, shapers, effects
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Voice: band-limited oscillator that plays the melody, struck by the Kastle
+// ---------------------------------------------------------------------------
+function polyBlep(t, dt) {
+  if (t < dt) { t /= dt; return t + t - t * t - 1; }
+  if (t > 1 - dt) { t = (t - 1) / dt; return t * t + t + t + 1; }
+  return 0;
+}
+
+// wave 0..1 morphs sine -> triangle -> saw -> pulse
+function morphOsc(ph, dt, wave, pw) {
+  const x = wave * 3;
+  const seg = x >= 3 ? 2 : Math.floor(x);
+  const f = x - seg;
+  const shape = (k) => {
+    switch (k) {
+      case 0: return Math.sin(TAU * ph);
+      case 1: return ph < 0.5 ? 4 * ph - 1 : 3 - 4 * ph;
+      case 2: return 2 * ph - 1 - polyBlep(ph, dt);
+      default: {
+        let t2 = ph - pw; if (t2 < 0) t2 += 1;
+        return (ph < pw ? 1 : -1) + polyBlep(ph, dt) - polyBlep(t2, dt);
+      }
+    }
+  };
+  if (f < 0.001) return shape(seg);
+  if (f > 0.999) return shape(seg + 1);
+  return shape(seg) * (1 - f) + shape(seg + 1) * f;
+}
+
+class Voice {
+  constructor(sr) {
+    this.sr = sr;
+    this.ph1 = 0; this.ph2 = 0.37; this.phS = 0;
+    this.hz = 110; this.env = 0; this.stage = 0; this.vel = 1;
+    this.out = 0; this.lastGate = 0;
+  }
+  strike(vel) { this.stage = 1; this.vel = vel; }
+  process(targetHz, P, wave, pw, drone) {
+    const sr = this.sr;
+    const glide = P['o.glide'];
+    if (glide > 0.001) {
+      const a = 1 - Math.exp(-1 / ((0.002 + glide * glide * 0.8) * sr));
+      this.hz *= Math.pow(targetHz / this.hz, a);
+    } else this.hz = targetHz;
+    const hz = Math.min(this.hz, sr * 0.45);
+    // AD envelope
+    if (drone) { this.env += (1 - this.env) * 0.001; }
+    else if (this.stage === 1) {
+      const att = 0.001 * Math.pow(1000, P['o.att']);
+      this.env += (1.25 - this.env) * (1 - Math.exp(-1 / (att * sr)));
+      if (this.env >= 1) { this.env = 1; this.stage = 2; }
+    } else if (this.stage === 2) {
+      const dec = 0.02 * Math.pow(200, P['o.dec']);
+      this.env *= Math.exp(-6.9 / (dec * sr));
+      if (this.env < 1e-5) { this.env = 0; this.stage = 0; }
+    }
+    if (this.env === 0 && !drone) { this.out = 0; return 0; }
+    const dt1 = hz / sr;
+    const detMix = P['o.det'];
+    const dt2 = dt1 * Math.pow(2, (detMix * 25) / 1200);
+    this.ph1 += dt1; if (this.ph1 >= 1) this.ph1 -= 1;
+    this.ph2 += dt2; if (this.ph2 >= 1) this.ph2 -= 1;
+    this.phS += dt1 * 0.5; if (this.phS >= 1) this.phS -= 1;
+    let y = morphOsc(this.ph1, dt1, wave, pw);
+    if (detMix > 0.001) y += morphOsc(this.ph2, dt2, wave, pw) * detMix;
+    const sub = P['o.sub'];
+    if (sub > 0.001) {
+      const dS = dt1 * 0.5;
+      let t2 = this.phS - 0.5; if (t2 < 0) t2 += 1;
+      y += ((this.phS < 0.5 ? 1 : -1) + polyBlep(this.phS, dS) - polyBlep(t2, dS)) * sub;
+    }
+    y /= 1 + detMix * 0.6 + sub * 0.6;
+    this.out = y * this.env * this.vel;
+    return this.out;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LFO: sine, triangle, ramp up, ramp down, square, sample & hold, smooth random
+// ---------------------------------------------------------------------------
+class LFO {
+  constructor() { this.phase = 0; this.last = 0; this.sh = Math.random(); this.a = Math.random(); this.b = Math.random(); this.out = 0.5; }
+  step(phase, shape) {
+    if (phase < this.last) { this.sh = Math.random(); this.a = this.b; this.b = Math.random(); }
+    this.last = phase;
+    const p = phase;
+    let v;
+    switch (shape) {
+      case 0: v = 0.5 - 0.5 * Math.cos(TAU * p); break;
+      case 1: v = p < 0.5 ? p * 2 : 2 - p * 2; break;
+      case 2: v = p; break;
+      case 3: v = 1 - p; break;
+      case 4: v = p < 0.5 ? 1 : 0; break;
+      case 5: v = this.sh; break;
+      default: v = this.a + (this.b - this.a) * (0.5 - 0.5 * Math.cos(Math.PI * p));
+    }
+    this.out = v;
+    return v;
+  }
+}
+
 class SVF {
   // Cytomic TPT state-variable filter
   constructor() { this.ic1 = 0; this.ic2 = 0; this.a1 = 0; this.a2 = 0; this.a3 = 0; this.k = 2; }
@@ -577,6 +733,13 @@ class SVF {
     const v2 = this.ic2 + this.a2 * this.ic1 + this.a3 * v3;
     this.ic1 = 2 * v1 - this.ic1; this.ic2 = 2 * v2 - this.ic2;
     return v2;
+  }
+  bp(v0) { // unity-peak band-pass
+    const v3 = v0 - this.ic2;
+    const v1 = this.a1 * this.ic1 + this.a2 * v3;
+    const v2 = this.ic2 + this.a2 * this.ic1 + this.a3 * v3;
+    this.ic1 = 2 * v1 - this.ic1; this.ic2 = 2 * v2 - this.ic2;
+    return v1 * this.k;
   }
   hp(v0) {
     const v3 = v0 - this.ic2;
@@ -676,12 +839,21 @@ const DEFAULT_PARAMS = {
   'r.size': 0.55, 'r.damp': 0.45, 'r.mix': 0.2,
   'm.vol': 0.6,
   'g.root': 9, 'g.scale': 0,
+  // round 2: dial-in controls
+  'k.wave': 0, 'k.kit': 0,
+  'o.lvlW': 0, 'o.lvlD': 0, 'o.wave': 0.667, 'o.pw': 0.5, 'o.sub': 0, 'o.det': 0,
+  'o.oct': 0, 'o.fine': 0, 'o.glide': 0, 'o.att': 0.05, 'o.dec': 0.45, 'o.src': 0, 'o.trig': 0,
+  'l.rate': 0.4, 'l.shape': 0, 'l.sync': 0,
+  'f.env': 0, 'f.envDec': 0.4, 'f.bp': 0,
+  'w.damp': 0, 'w.stretch': 0, 'w.spread': 0,
 };
 for (const d of DESTS) DEFAULT_PARAMS['amt.' + d] = 0.5;
 // gate inputs pass full level by default
 DEFAULT_PARAMS['amt.k.trig'] = 1; DEFAULT_PARAMS['amt.c.stepclk'] = 1; DEFAULT_PARAMS['amt.w.adv'] = 1;
+DEFAULT_PARAMS['amt.o.gate'] = 1;
 
 const SYNC_TICKS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
+const LFO_SYNC_TICKS = [0, 1, 2, 4, 8, 16, 32, 64];
 
 // ---------------------------------------------------------------------------
 // The processor
@@ -694,7 +866,12 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
     this.sr = sr;
     this.P = Object.assign({}, DEFAULT_PARAMS);
     this.scales = opts.scales || [[0, 3, 5, 7, 10]];
-    this.kastle = new KastleChip(sr, opts.tables || []);
+    this.kastle = new KastleChip(sr, opts.samples || {}, opts.kits || [], opts.waves || []);
+    this.voice = new Voice(sr);
+    this.lfo = new LFO();
+    this.lastHits = 0;
+    this.fenv = 0;
+    this.voiceHz = 110; this.voiceWave = 0.667; this.voicePw = 0.5;
     this.clock = new ClockChip(sr);
     this.wingie = new Wingie(sr, opts.tunings || []);
     this.echo = new TapeEcho(sr);
@@ -817,6 +994,8 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
       k.qntHzTarget = 440 * Math.pow(2, (n - 69) / 12);
     }
     k.xy = P['k.xy'] > 0.5;
+    k.setKit(P['k.kit']);
+    k.setWave(clamp(P['k.wave'] + D[DST['k.wave']], 0, 1));
     k.decayMul = clamp(P['k.range'], 0.25, 16);
   }
 
@@ -855,6 +1034,14 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
     const downN = 1 + Math.floor(P['s.down'] * P['s.down'] * 47);
     const colorType = P['x.type'] | 0;
     const slope24 = P['f.slope'] > 0.5;
+    const bandpass = P['f.bp'] > 0.5;
+    const fenvDecay = Math.exp(-4 * 6.9 / (0.01 * Math.pow(200, P['f.envDec']) * sr));
+    const voice = this.voice, lfo = this.lfo;
+    const voiceTrig = P['o.trig'] | 0;
+    const voiceOn = P['o.lvlW'] > 0.0005 || P['o.lvlD'] > 0.0005 ||
+      this.patched[DST['o.gate']] === 1 || this.cables.some((c) => c[0] === SRC['o.out'] || c[0] === SRC['o.env']);
+    const lfoTicks = LFO_SYNC_TICKS[P['l.sync'] | 0] || 0;
+    const lfoShape = P['l.shape'] | 0;
     const muteStep = 1 / (0.25 * sr);
     const guardOn = P['w.guard'] > 0.5;
     const driftHz = 0.02 * Math.pow(150, P['u.drift']);
@@ -901,6 +1088,47 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
       if (ctl) this.applyKastleTargets();
       k.tick();
 
+      // ---- hits: strike the voice and the filter envelope ----
+      if (k.hits !== this.lastHits) {
+        this.lastHits = k.hits;
+        const vel = k.accent ? 0.6 : 1;
+        this.fenv = vel;
+        if (voiceTrig === 0) voice.strike(vel);
+      }
+      if (voiceTrig === 1) {
+        const g = dst[D['o.gate']];
+        if (g > 0.5 && voice.lastGate <= 0.5) voice.strike(1);
+        voice.lastGate = g;
+      }
+
+      // ---- LFO ----
+      let lph;
+      if (lfoTicks > 0) lph = ((this.divCount % lfoTicks) + (running ? clk.phase : 0)) / lfoTicks;
+      else {
+        const lhz = 0.02 * Math.pow(1000, clamp(P['l.rate'] + dst[D['l.rate']], 0, 1));
+        lfo.phase += lhz / sr; if (lfo.phase >= 1) lfo.phase -= Math.floor(lfo.phase);
+        lph = lfo.phase;
+      }
+      lfo.step(lph, lfoShape);
+
+      // ---- voice ----
+      let vOut = 0;
+      if (voiceOn) {
+        if (ctl) {
+          let note;
+          const vsrc = P['o.src'] | 0;
+          if (vsrc === 0 || vsrc === 1) { note = w.sides[vsrc].note; if (note < 0) note = 48 + (P['g.root'] | 0); }
+          else if (vsrc === 2) note = this.quantize(36 + (P['g.root'] | 0) + clk.step * 24);
+          else note = 48 + (P['g.root'] | 0);
+          note += (P['o.oct'] | 0) * 12;
+          if (pt[D['o.pitch']]) note = this.quantize(note + clamp(dst[D['o.pitch']], -1, 1) * 24);
+          this.voiceHz = w.noteFreq(note, P['w.a3'], P['w.tuning']) * Math.pow(2, P['o.fine'] / 1200);
+          this.voiceWave = clamp(P['o.wave'] + dst[D['o.wave']], 0, 1);
+          this.voicePw = clamp(P['o.pw'] + dst[D['o.pwm']] * 0.45, 0.05, 0.95);
+        }
+        vOut = voice.process(this.voiceHz, P, this.voiceWave, this.voicePw, voiceTrig === 2);
+      }
+
       // ---- pre-shaper ----
       const kOut = k.out * sm['k.outLvl'];
       const kNoise = k.noise * sm['k.noiseLvl'];
@@ -929,6 +1157,8 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
         inR = Math.round(inR * qStep) / qStep;
       }
 
+      if (voiceOn) { const vw = vOut * P['o.lvlW']; inL += vw; inR += vw; }
+
       // ---- Wingie ----
       if (w.blockCount === 0) {
         const decayKnob = clamp(P['w.decay'] + dst[D['w.decay']], 0, 1);
@@ -948,7 +1178,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
             semis = this.quantize(base + clamp(dst[noteDst], -1, 1) * 24) - base;
           }
           w.computeFreqs(ch, P, semis);
-          w.updateCoeffs(ch, t60, guardOn, 1, 0.998435);
+          w.updateCoeffs(ch, t60, guardOn, 1, 0.998435, clamp(P['w.damp'], 0, 1));
         }
       }
       w.blockCount = (w.blockCount + 1) % MODAL_BLOCK;
@@ -998,9 +1228,11 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
 
       // ---- filters ----
       let L = wl * 2.5, R = wr * 2.5; // make-up gain after Wingie's post gain
+      if (voiceOn) { const vd = vOut * P['o.lvlD'] * 0.7; L += vd; R += vd; }
       if (ctl) {
         const hpHz = clamp(20 * Math.pow(1000, clamp(sm['f.hp'] + dst[D['f.hp']], 0, 1)), 15, fmax);
-        const lpHz = clamp(20 * Math.pow(1000, clamp(sm['f.lp'] + dst[D['f.lp']], 0, 1)), 15, fmax);
+        this.fenv = this.fenv > 1e-5 ? this.fenv * fenvDecay : 0;
+        const lpHz = clamp(20 * Math.pow(1000, clamp(sm['f.lp'] + dst[D['f.lp']] + P['f.env'] * this.fenv * 0.7, 0, 1)), 15, fmax);
         const gH = Math.tan(Math.PI * hpHz / sr);
         const kH = 2 - 1.9 * sm['f.hpRes'];
         this.hpL.set(gH, kH); this.hpR.set(gH, kH);
@@ -1016,7 +1248,14 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
         }
       }
       L = this.hpL.hp(L); R = this.hpR.hp(R);
-      if (slope24) {
+      if (bandpass) {
+        if (slope24) {
+          L = this.lpL2.bp(fastTanh(this.lpL1.bp(L) * 0.8) * 1.25);
+          R = this.lpR2.bp(fastTanh(this.lpR1.bp(R) * 0.8) * 1.25);
+        } else {
+          L = this.lpL1.bp(L); R = this.lpR1.bp(R);
+        }
+      } else if (slope24) {
         L = this.lpL2.lp(fastTanh(this.lpL1.lp(L) * 0.8) * 1.25);
         R = this.lpR2.lp(fastTanh(this.lpR1.lp(R) * 0.8) * 1.25);
       } else {
@@ -1151,6 +1390,9 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
       src[S['w.trigL']] = w.L.trig ? 1 : 0;
       src[S['w.trigR']] = w.R.trig ? 1 : 0;
       src[S['w.env']] = Math.min(1, this.wEnv * 3);
+      src[S['o.out']] = voice.out;
+      src[S['o.env']] = voice.env;
+      src[S['l.out']] = lfo.out;
     }
 
     this.t += n;
@@ -1172,6 +1414,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
         peak: [this.peakL, this.peakR],
         limit: this.limEnv > 0.85,
         drift: src[S['u.drift']],
+        lfo: lfo.out, venv: voice.env, vhz: this.voiceHz, fenv: this.fenv, kit: k.kit,
       });
       this.peakL = 0; this.peakR = 0;
     }

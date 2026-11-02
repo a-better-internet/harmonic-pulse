@@ -6,12 +6,14 @@ Everything runs in one AudioWorklet, so each patch cable is sample-accurate and 
 
 ```
  CLOCK ─ square / triangle / stepped voltage ─┐
- DIVIDE ÷2 ÷3 ÷4 ÷8 · DRIFT LFO ──────────────┤   patch bay
+ DIVIDE ÷2 ÷3 ÷4 ÷8 · DRIFT · LFO (7 shapes) ─┤   patch bay
                                                ▼
- KASTLE DRUM ─► SHAPE ─► WINGIE ─► HP ─► LP ─► COLOUR ─► TAPE ECHO ─► REVERB ─► OUT
- (VCO chip)     drive    2 × 9 modal          tape/tube   synced to
-                fold     resonators           fold/fuzz   the clock
-                bits     5 modes
+ KASTLE DRUM ──┬─► SHAPE ─► WINGIE ─┬─► HP ─► LP/BP ─► COLOUR ─► TAPE ECHO ─► REVERB ─► OUT
+ (VCO chip,    │   drive    2 × 9   │        ▲ env    tape/tube  synced to
+  8 wavetables,│   fold     modal   │        │        fold/fuzz  the clock
+  8 kits)      │   bits             │      every hit
+       hits ───┴─► VOICE ───────────┘
+                   sine › tri › saw › pulse, follows the melody
 ```
 
 ## Run it
@@ -51,6 +53,13 @@ Enhancements are marked in the UI:
 
 - **Range** stretches the envelope; ×1 is the hardware.
 - **Quantise** snaps PITCH to the global key and scale, across four octaves.
+- **Wave** morphs the chip's wavetable. The firmware has a `writeWave()` that can load sine, triangle, square or saw, but the stock build only ever loads sine. The knob sweeps those four plus the Chebyshev 3–6 tables from `bastlAttinySamples`, crossfading neighbours. The wavetable is used everywhere the firmware reads it: the FM carrier and modulator, the NOISE ring modulator, T&H, and the NOISES glitch comparator. That is why it changes the character of the whole drum, not just its tone.
+- **Kit** swaps the four sample slots (hat, kick, snare, clap) for other sets from `bastlAttinySamples`:
+  - **TR (stock)** and **TR open**.
+  - **Game Boy** and **GB glitch**.
+  - **Glitch A** and **Glitch B**.
+  - **Metal** (cowbells and ride).
+  - **Acoustic**.
 
 The firmware only recalculates pitch when PITCH moves; on the hardware, ADC noise usually does that anyway. The port therefore also refreshes pitch whenever the drum style changes.
 
@@ -77,10 +86,37 @@ The **Divide · Drift** module is an addition. Its ÷2, ÷3, ÷4 and ÷8 square 
 
   Kastle hits often overlap without falling back under the threshold, so the follower also re-arms on a relative drop. That way every hit still advances the note.
 - **The firmware's eight alternate tunings** (Centaur, Harp of New Albion, Well-Tuned Piano…) and A3 tuning.
+- **Enhancements** for shaping the material:
+  - **Damp**: partials above ~300 Hz die sooner, like wood or felt.
+  - **Stretch**: bends every partial ratio to r^(1 ± 0.25). Up sounds like bells and metal; down is squeezed and gamelan-like.
+  - **Spread**: detunes the sides apart by up to 40 cents.
+
+### Added modules
+
+- **Voice.** A band-limited (PolyBLEP) oscillator that morphs sine › triangle › saw › pulse.
+  - **Tone:** Width (PWM), Sub (a square an octave down), Unison (a second oscillator up to +25 cents), Octave, Fine and Glide.
+  - **Envelope:** an attack/decay envelope that the Kastle **hits** strike. Accents strike softer. It can also run from a **gate** input, or as a **drone**.
+  - **Pitch:** follows the Wingie left or right note, the quantised step voltage, or the key root.
+  - **Routing:** **To Wingie** sends it into the resonators as a pitched exciter. **Direct** mixes it in after them, before the filters.
+- **LFO.** Sine, triangle, ramp up, ramp down, square, sample & hold and smooth random. It runs free (0.02–20 Hz) or phase-locked to the clock at 1–64 ticks per cycle.
+- **Filter envelope.** Every Kastle hit opens the low-pass (or closes it, with a negative amount), with its own decay. **Band-pass** turns the low filter into a resonant band-pass.
+- **Master** lives in the top bar, so it is always within reach.
+
+## Dialling in a sound
+
+A good order to work in:
+
+1. **Pulse first.** Patch ÷2 (16ths), ÷4 (8ths) or ÷3 (dotted) into TRIG, and set BPM. Lower the TRIG attenuverter to about 60% for softer accented hits.
+2. **Drum colour.** DRUM picks the style, and DECAY sets length (below about 40% the pitch drops like a kick). WAVE reshapes the oscillator, and Kit changes the samples.
+3. **Melody.** Put a Wingie side in String or Bar and tap a sequence. Patch Step into Note L or Note R for variations that stay in the key.
+4. **Material.** Wingie Decay sets the ring length. Damp makes it woodier, Stretch makes it more bell-like, and Spread makes it wider.
+5. **Voice on top.** Raise Direct for a sequencer-bass line that plays the same melody, or To Wingie to excite the resonators with a pitched tone. Try a saw with Unison and a little Glide.
+6. **Shape it.** Use the filter cutoff, resonance and Env amt for a squelch on every hit. An LFO into LP or PWM adds a slow sweep, and Colour adds saturation.
+7. **Space.** A synced echo at 3 ticks gives a dotted-8th motorik delay. Add reverb to taste.
 
 ### Patch bay
 
-Square jacks are outputs and round jacks are inputs. Drag between two jacks, or click one and then the other. Click a cable to unplug it, or double-click a jack to unplug everything on it. Every input has an attenuverter. Inputs sum with their knob.
+Square jacks are outputs and round jacks are inputs. Drag between two jacks, or click one and then the other. Hold `Alt` and click a cable to unplug it, or double-click a jack to unplug everything on it. Every input has an attenuverter. Inputs sum with their knob.
 
 | Outputs | Inputs |
 |---|---|
@@ -88,18 +124,23 @@ Square jacks are outputs and round jacks are inputs. Drag between two jacks, or 
 | Clock, Tri, Step | Clock Rate, Step clk |
 | ÷2, ÷3, ÷4, ÷8, Drift | Wingie Note L, Note R (quantised to the key), Adv, Decay |
 | Wingie Trig L, Trig R, Env | Shape Fold, Filter LP, HP |
+| Voice Out, Env; LFO | Kastle Wave; Voice Pitch, Wave, PWM, Gate; LFO Rate |
 
 The Wingie's trigger and envelope outputs can be patched back into the Kastle to create feedback rhythms.
 
 ## Playing
 
-- **Patches.** Seven factory patches cover the range:
+- **Patches.** Eleven factory patches cover the range:
   - **Motorik**: a Neu!-style steady 16th pulse.
   - **Kosmische Höhle**: cave drones.
   - **Bar Ostinato**: E phrygian.
   - **Harmonia Chords**: envelope-pumped poly chords.
   - **Can Loop**: ÷3 melodic advance over 16ths.
   - **Ratio Bells**: just intonation.
+  - **Phaedra Sequence**: a gliding saw Voice on the stepped generator, with a filter envelope and a bar-long LFO sweep.
+  - **Autobahn Pulse**: a square Voice with sub, its pulse width modulated by a synced LFO.
+  - **Gamelan Stretch**: a Chebyshev wavetable striking squeezed, damped bars; sample & hold walks the wavetable.
+  - **Glitch Lattice**: glitch-kit hats into two caves, through a band-pass.
   - **Init**: a clean start.
 
   **Random** builds a new, musical patch. Save keeps patches in this browser, and Export/Import moves them around as JSON. The current state autosaves.
@@ -108,6 +149,7 @@ The Wingie's trigger and envelope outputs can be patched back into the Kastle to
   - `Space`: hit the drum.
   - `Esc`: cancel patching.
   - `Shift`-click a Wingie key: append a note.
+  - `Alt`-click a cable: unplug it. Cables otherwise let clicks through to the controls beneath them.
   - Knobs: drag, scroll or use the arrow keys; double-click to reset.
 - **MIDI.** Notes on channel 1 go to Wingie L, channel 2 to Wingie R, and channel 3 alternates. Channel 10 hits the drum. CC 1, 7 and 11 control decay, volume and mix, as on the Wingie.
 
@@ -119,7 +161,12 @@ npm test
 
 `npm test` runs the DSP headlessly in Node. It covers:
 
-- every drum style for stability;
+- every drum style × wave × kit combination for stability;
+- the wave morph landing exactly on the firmware tables;
+- Voice pitch tracking and its envelope;
+- LFO clock sync;
+- the filter envelope;
+- Damp, Stretch and Spread;
 - 3-level trigger behaviour;
 - sequencer advance counts;
 - resonator pitch accuracy;
@@ -132,9 +179,9 @@ npm test
 npm run test:browser
 ```
 
-`npm run test:browser` drives the real page in headless Chromium and needs Playwright and the dev server on port 8765. It covers patching by drag and by click, building a sequence, cycling modes, presets, saving and WAV recording.
+`npm run test:browser` drives the real page in headless Chromium and needs Playwright and the dev server on port 8765. It covers patching by drag and by click, Alt-click unplugging, building a sequence, cycling modes, the new modules, presets, saving and WAV recording.
 
-`tools/extract_kastle_samples.py` regenerates `src/dsp/kastle-samples.js` from the firmware's `TR_HH_AT.h`.
+`tools/extract_kastle_samples.py` regenerates `src/dsp/kastle-samples.js` from the firmware folder: `TR_HH_AT.h`, every `bastlAttinySamples/*_AT.h` sample, and the CHEB3–6 wavetables.
 
 ## Layout
 
@@ -145,7 +192,7 @@ src/dsp/kastle-samples.js        sample tables from the Kastle firmware (generat
 src/engine.js                    AudioContext, worklet messaging, WAV recorder
 src/main.js                      UI controller, presets, MIDI
 src/ui/knob.js, src/ui/patchbay.js
-src/params.js, src/patch-def.js, src/presets.js, src/music.js
+src/params.js, src/patch-def.js, src/presets.js, src/music.js, src/kits.js
 ```
 
 ## Credits and licensing

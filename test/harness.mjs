@@ -1,5 +1,6 @@
 // Minimal AudioWorkletGlobalScope mock so the processor can run in Node.
-import { KASTLE_TABLES } from '../src/dsp/kastle-samples.js';
+import { KASTLE_SAMPLES, KASTLE_WAVES } from '../src/dsp/kastle-samples.js';
+import { KITS } from '../src/kits.js';
 import { SCALES, ALT_TUNINGS } from '../src/music.js';
 
 export async function loadProcessor(sr = 48000) {
@@ -15,7 +16,9 @@ export async function loadProcessor(sr = 48000) {
   return (extra = {}) => {
     const p = new Proc({
       processorOptions: {
-        tables: KASTLE_TABLES,
+        samples: KASTLE_SAMPLES,
+        kits: KITS.map((k) => k.slots),
+        waves: Object.values(KASTLE_WAVES),
         scales: SCALES.map((s) => s.steps),
         tunings: ALT_TUNINGS.map((t) => t.ratios),
         ...extra,

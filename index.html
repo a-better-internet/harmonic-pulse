@@ -37,6 +37,11 @@
       <button id="help-btn" class="btn" aria-expanded="false" aria-controls="help">Guide</button>
     </div>
     <canvas id="scope" width="360" height="64" aria-label="Output oscilloscope"></canvas>
+    <div class="top-master">
+      <div data-knob="m.vol" data-size="sm"></div>
+      <div class="vu" aria-hidden="true"><i><b id="vu-l"></b></i><i><b id="vu-r"></b></i></div>
+      <span class="lamp lim" id="lim" title="Limiter active"></span>
+    </div>
   </header>
 
   <p id="preset-note" class="preset-note"></p>
@@ -46,12 +51,12 @@
     <div class="help-cols">
       <div>
         <h2>How it flows</h2>
-        <p>The <b>Kastle Drum</b> fires short synthetic drum hits into the <b>Wingie</b>, a bank of 9 tuned resonators on each side. Each hit rings the resonators at musical pitches, so the drum becomes a melody. After that come the <b>filters</b>, <b>colour</b> (a post wave shaper), <b>tape echo</b> and <b>reverb</b>.</p>
+        <p>The <b>Kastle Drum</b> fires short synthetic drum hits into the <b>Wingie</b>, a bank of 9 tuned resonators on each side. Each hit rings the resonators at musical pitches, so the drum becomes a melody. After that come the <b>filters</b>, <b>colour</b> (a post wave shaper), <b>tape echo</b> and <b>reverb</b>. The <b>Voice</b> adds a sine-to-pulse oscillator that plays the same melody, struck by each hit.</p>
         <p>For melodic pulses, set a Wingie side to <b>String</b> or <b>Bar</b>. Tap a key to set its note, or hold <kbd>Shift</kbd> (or switch on <b>Append</b>) to add notes. Each hit louder than the threshold steps to the next note.</p>
       </div>
       <div>
         <h2>Patching</h2>
-        <p>Drag from any jack to another jack, or click one and then the other. <b>Square</b> jacks are outputs and <b>round</b> jacks are inputs. Each input has a small attenuverter knob. Click a cable to unplug it, or double-click a jack to unplug everything on it.</p>
+        <p>Drag from any jack to another jack, or click one and then the other. <b>Square</b> jacks are outputs and <b>round</b> jacks are inputs. Each input has a small attenuverter knob. Hold <kbd>Alt</kbd> and click a cable to unplug it, or double-click a jack to unplug everything on it.</p>
         <p><b>TRIG</b> is the Kastle's three-level input. Each change between low, mid and high fires a hit, and a one-step change is an accent. A square wave gives full hits on both edges, so ÷2 → TRIG plays 16ths in BPM lock. The triangle walks through all three levels, giving four accented hits per cycle.</p>
       </div>
       <div>
@@ -77,6 +82,11 @@
             <div data-knob="k.drum"></div>
             <div data-knob="k.pitch"></div>
             <div data-knob="k.decay"></div>
+          </div>
+          <div class="knob-row tight">
+            <div data-knob="k.wave"></div>
+            <canvas class="wave-preview" id="k-wave-view" width="120" height="44" aria-label="Kastle wavetable"></canvas>
+            <label class="field"><span>Kit</span><select id="kit"></select></label>
           </div>
           <div class="knob-row tight">
             <div data-knob="k.range" data-size="sm" title="Enhancement: stretches the envelope (×1 is the hardware)"></div>
@@ -117,6 +127,7 @@
         <div class="jack-cell" data-in="k.drum"></div>
         <div class="jack-cell" data-in="k.pitch" data-amt-label="Pitch mod"></div>
         <div class="jack-cell" data-in="k.decay"></div>
+        <div class="jack-cell" data-in="k.wave"></div>
         <div class="jack-cell" data-in="c.rate"></div>
         <div class="jack-cell" data-in="c.stepclk"></div>
         <span class="patch-sep"></span>
@@ -144,6 +155,23 @@
         <div class="jack-cell" data-out="u.div4"></div>
         <div class="jack-cell" data-out="u.div8"></div>
         <div class="jack-cell" data-out="u.drift"></div>
+      </div>
+    </section>
+
+    <!-- LFO -->
+    <section class="module lfo" aria-labelledby="l-title">
+      <header class="mod-head"><h2 id="l-title">LFO</h2><span class="lamp" id="lfo-led" title="LFO level"></span></header>
+      <div class="mod-body">
+        <div class="seg wrap" id="lfo-shape" role="radiogroup" aria-label="LFO shape"></div>
+        <div class="knob-row tight">
+          <div data-knob="l.rate"></div>
+          <label class="field"><span>Sync</span><select id="lfo-sync"></select></label>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-in="l.rate"></div>
+        <span class="patch-sep"></span>
+        <div class="jack-cell" data-out="l.out"></div>
       </div>
     </section>
 
@@ -191,6 +219,11 @@
             <div data-toggle="w.hold" title="Freeze: 60 s resonator decay"></div>
             <div data-toggle="w.guard" title="Anti-feedback energy guard (from Wingie2 v4)"></div>
           </div>
+          <div class="knob-row tight">
+            <div data-knob="w.damp" data-size="sm"></div>
+            <div data-knob="w.stretch" data-size="sm"></div>
+            <div data-knob="w.spread" data-size="sm"></div>
+          </div>
           <label class="field"><span>Tuning</span><select id="tuning"></select></label>
         </div>
         <div class="w-side" data-ch="1"></div>
@@ -224,10 +257,57 @@
           <div data-knob="f.lpRes" data-size="sm"></div>
           <div data-toggle="f.slope"></div>
         </div>
+        <div class="knob-row">
+          <div data-knob="f.env"></div>
+          <div data-knob="f.envDec" data-size="sm"></div>
+          <div data-toggle="f.bp" title="Turns the low-pass into a band-pass: a vocal, wah-like focus"></div>
+        </div>
       </div>
       <div class="patch-row">
         <div class="jack-cell" data-in="f.hp"></div>
         <div class="jack-cell" data-in="f.lp"></div>
+      </div>
+    </section>
+
+    <!-- VOICE -->
+    <section class="module voice" aria-labelledby="v-title">
+      <header class="mod-head">
+        <h2 id="v-title">Voice</h2>
+        <span class="readout dim" id="voice-readout"></span>
+        <span class="lamp" id="v-led" title="Voice envelope"></span>
+      </header>
+      <div class="mod-body">
+        <div class="voice-top">
+          <canvas class="wave-preview big" id="v-wave-view" width="220" height="64" aria-label="Voice waveform"></canvas>
+          <div class="voice-routing">
+            <label class="field"><span>Pitch from</span><select id="voice-src"></select></label>
+            <div class="seg" id="voice-trig" role="radiogroup" aria-label="Voice trigger"></div>
+          </div>
+        </div>
+        <div class="knob-row">
+          <div data-knob="o.wave"></div>
+          <div data-knob="o.pw"></div>
+          <div data-knob="o.sub"></div>
+          <div data-knob="o.det"></div>
+          <div data-knob="o.oct" data-size="sm"></div>
+          <div data-knob="o.fine" data-size="sm"></div>
+        </div>
+        <div class="knob-row">
+          <div data-knob="o.att"></div>
+          <div data-knob="o.dec"></div>
+          <div data-knob="o.glide"></div>
+          <div data-knob="o.lvlW"></div>
+          <div data-knob="o.lvlD"></div>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-in="o.pitch"></div>
+        <div class="jack-cell" data-in="o.wave"></div>
+        <div class="jack-cell" data-in="o.pwm"></div>
+        <div class="jack-cell" data-in="o.gate"></div>
+        <span class="patch-sep"></span>
+        <div class="jack-cell" data-out="o.out"></div>
+        <div class="jack-cell" data-out="o.env"></div>
       </div>
     </section>
 
@@ -263,15 +343,6 @@
       </div>
     </section>
 
-    <!-- MASTER -->
-    <section class="module master" aria-labelledby="m-title">
-      <header class="mod-head"><h2 id="m-title">Out</h2></header>
-      <div class="mod-body">
-        <div class="knob-row"><div data-knob="m.vol"></div></div>
-        <div class="vu" aria-hidden="true"><i><b id="vu-l"></b></i><i><b id="vu-r"></b></i></div>
-        <span class="lamp lim" id="lim" title="Limiter active"></span>
-      </div>
-    </section>
   </main>
 
   <footer class="foot">

@@ -5,6 +5,22 @@ export const DRUM_STYLES = ['FM', 'NOISE', 'T&H', 'KICK', 'SNARE', 'CLAP', 'HAT'
 export const STEP_MODES = ['RND', '8', '16'];
 export const SYNC_LABELS = ['free', '1 tick', '2 ticks', '3 ticks', '4 ticks', '6 ticks', '8 ticks', '12 ticks', '16 ticks'];
 export const COLOR_TYPES = ['Tape', 'Tube', 'Fold', 'Fuzz'];
+export const LFO_SHAPES = ['Sine', 'Tri', 'Up', 'Down', 'Sqr', 'S&H', 'Rnd'];
+export const LFO_SYNC = ['Free (Rate knob)', '1 tick', '2 ticks', '4 ticks (1 beat)', '8 ticks', '16 ticks (1 bar)', '32 ticks', '64 ticks'];
+export const VOICE_SOURCES = ['Wingie L note', 'Wingie R note', 'Step (quantised)', 'Key root'];
+export const VOICE_TRIGS = ['Hits', 'Gate in', 'Drone'];
+const KWAVES = ['Sine', 'Tri', 'Saw', 'Square', 'Cheb3', 'Cheb4', 'Cheb5', 'Cheb6'];
+const VWAVES = ['Sine', 'Tri', 'Saw', 'Pulse'];
+function morphName(names) {
+  return (v) => {
+    const x = v * (names.length - 1);
+    const i = Math.min(names.length - 2, Math.floor(x));
+    const f = x - i;
+    if (f < 0.04) return names[i];
+    if (f > 0.96) return names[i + 1];
+    return `${names[i]}›${names[i + 1]}`;
+  };
+}
 export const WINGIE_MODES = [
   { name: 'Poly', led: '#f4f1ea' },
   { name: 'String', led: '#ffd23f' },
@@ -78,6 +94,31 @@ export const PARAMS = {
   'r.size': { label: 'Size', def: 0.55, fmt: pct },
   'r.damp': { label: 'Damp', def: 0.45, fmt: pct },
   'r.mix': { label: 'Reverb', def: 0.2, fmt: pct },
+  // Round 2: dial-in
+  'k.wave': { label: 'Wave', def: 0, fmt: morphName(KWAVES), title: 'Morphs the firmware wavetable: sine, triangle, saw, square (writeWave) and the Chebyshev tables. Shapes FM, NOISE, T&H and the NOISES glitch.' },
+  'k.kit': { label: 'Kit', def: 0, min: 0, max: 7, step: 1 },
+  'o.lvlW': { label: 'To Wingie', def: 0, fmt: pct },
+  'o.lvlD': { label: 'Direct', def: 0, fmt: pct },
+  'o.wave': { label: 'Wave', def: 0.667, fmt: morphName(VWAVES) },
+  'o.pw': { label: 'Width', def: 0.5, min: 0.05, max: 0.95, fmt: pct },
+  'o.sub': { label: 'Sub', def: 0, fmt: pct },
+  'o.det': { label: 'Unison', def: 0, fmt: (v) => (v < 0.01 ? 'off' : `+${Math.round(v * 25)}¢`) },
+  'o.oct': { label: 'Octave', def: 0, min: -2, max: 2, step: 1, fmt: (v) => (v > 0 ? `+${v}` : String(v)) },
+  'o.fine': { label: 'Fine', def: 0, min: -50, max: 50, step: 1, bipolar: true, fmt: (v) => `${v > 0 ? '+' : ''}${Math.round(v)}¢` },
+  'o.glide': { label: 'Glide', def: 0, fmt: (v) => (v < 0.01 ? 'off' : `${Math.round((0.002 + v * v * 0.8) * 1000)}ms`) },
+  'o.att': { label: 'Attack', def: 0.05, fmt: (v) => `${Math.round(Math.pow(1000, v))}ms` },
+  'o.dec': { label: 'Decay', def: 0.45, fmt: (v) => { const t = 0.02 * Math.pow(200, v); return t < 1 ? `${Math.round(t * 1000)}ms` : `${t.toFixed(1)}s`; } },
+  'o.src': { label: 'Pitch from', def: 0, min: 0, max: 3, step: 1 },
+  'o.trig': { label: 'Trigger', def: 0, min: 0, max: 2, step: 1 },
+  'l.rate': { label: 'Rate', def: 0.4, fmt: (v) => `${(0.02 * Math.pow(1000, v)).toFixed(2)}Hz` },
+  'l.shape': { label: 'Shape', def: 0, min: 0, max: 6, step: 1 },
+  'l.sync': { label: 'Sync', def: 0, min: 0, max: 7, step: 1 },
+  'f.env': { label: 'Env amt', def: 0, min: -1, max: 1, bipolar: true, fmt: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`, title: 'How far each Kastle hit opens (or closes) the filter' },
+  'f.envDec': { label: 'Env decay', def: 0.4, fmt: (v) => { const t = 0.01 * Math.pow(200, v); return t < 1 ? `${Math.round(t * 1000)}ms` : `${t.toFixed(1)}s`; } },
+  'f.bp': { label: 'Band-pass', def: 0, toggle: true },
+  'w.damp': { label: 'Damp', def: 0, fmt: pct, title: 'Higher partials die sooner: 0 is the Wingie, up is wood and felt' },
+  'w.stretch': { label: 'Stretch', def: 0, min: -1, max: 1, bipolar: true, fmt: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`, title: 'Bends the partial ratios: up is bell and metal, down is squeezed and gamelan-like' },
+  'w.spread': { label: 'Spread', def: 0, fmt: (v) => `${Math.round(v * 40)}¢`, title: 'Detunes left down and right up for stereo width' },
   // Master / global
   'm.vol': { label: 'Master', def: 0.6, fmt: pct },
   'g.root': { label: 'Root', def: 9, min: 0, max: 11, step: 1 },

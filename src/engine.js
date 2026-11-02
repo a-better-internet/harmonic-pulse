@@ -1,7 +1,8 @@
 // Owns the AudioContext and the worklet node. Everything else talks to the
 // DSP through this class; it is safe to call setters before start().
 
-import { KASTLE_TABLES } from './dsp/kastle-samples.js';
+import { KASTLE_SAMPLES, KASTLE_WAVES } from './dsp/kastle-samples.js';
+import { KITS } from './kits.js';
 import { SCALES, ALT_TUNINGS } from './music.js';
 
 export class Engine {
@@ -30,7 +31,9 @@ export class Engine {
       numberOfOutputs: 1,
       outputChannelCount: [2],
       processorOptions: {
-        tables: KASTLE_TABLES,
+        samples: KASTLE_SAMPLES,
+        kits: KITS.map((k) => k.slots),
+        waves: Object.values(KASTLE_WAVES),
         scales: SCALES.map((s) => s.steps),
         tunings: ALT_TUNINGS.map((t) => t.ratios),
       },

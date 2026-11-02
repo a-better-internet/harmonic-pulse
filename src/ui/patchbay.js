@@ -1,5 +1,5 @@
 // Patch cables between jacks. Drag from a jack to another jack, or click one
-// jack then the other. Click a cable (or double-click a jack) to unplug.
+// jack then the other. Alt-click a cable, or double-click a jack, to unplug.
 
 import { CABLE_COLORS } from '../patch-def.js';
 
@@ -22,7 +22,12 @@ export class PatchBay {
 
     new ResizeObserver(() => this.redraw()).observe(rack);
     window.addEventListener('resize', () => this.redraw());
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.disarm(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.disarm();
+      if (e.key === 'Alt') rack.classList.add('cable-edit');
+    });
+    document.addEventListener('keyup', (e) => { if (e.key === 'Alt') rack.classList.remove('cable-edit'); });
+    window.addEventListener('blur', () => rack.classList.remove('cable-edit'));
   }
 
   registerJack(el, port, dir) {
@@ -150,12 +155,12 @@ export class PatchBay {
     const hit = document.createElementNS(SVG_NS, 'path');
     hit.setAttribute('class', 'cable-hit');
     const title = document.createElementNS(SVG_NS, 'title');
-    title.textContent = `${from} → ${to} (click to unplug)`;
+    title.textContent = `${from} → ${to} (Alt-click to unplug)`;
     hit.appendChild(title);
     g.append(shadow, path, hit);
     this.svg.insertBefore(g, this.temp);
     const cable = { from, to, color: col, g, path, shadow, hit };
-    hit.addEventListener('click', () => this.disconnect(cable));
+    hit.addEventListener('click', (e) => { if (e.altKey) this.disconnect(cable); });
     this.cables.push(cable);
     this.updateJackState();
     this.redrawCable(cable);

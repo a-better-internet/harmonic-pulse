@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node tools/serve.mjs 8000",
-    "test": "node --test test/dsp.test.mjs test/ui-defs.test.mjs",
+    "test": "node --test test/dsp.test.mjs test/dialin.test.mjs test/ui-defs.test.mjs",
     "test:browser": "node test/browser-smoke.cjs"
   },
   "engines": { "node": ">=18" }

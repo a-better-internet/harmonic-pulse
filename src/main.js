@@ -1,7 +1,10 @@
 import { Engine } from './engine.js';
 import { Knob } from './ui/knob.js';
 import { PatchBay } from './ui/patchbay.js';
-import { PARAMS, defaultParams, DRUM_STYLES, STEP_MODES, SYNC_LABELS, COLOR_TYPES, WINGIE_MODES, drumStyle } from './params.js';
+import { PARAMS, defaultParams, DRUM_STYLES, STEP_MODES, SYNC_LABELS, COLOR_TYPES, WINGIE_MODES, drumStyle,
+  LFO_SHAPES, LFO_SYNC, VOICE_SOURCES, VOICE_TRIGS } from './params.js';
+import { KITS } from './kits.js';
+import { KASTLE_WAVES } from './dsp/kastle-samples.js';
 import { INPUTS, OUTPUTS } from './patch-def.js';
 import { PRESETS, defaultWingie } from './presets.js';
 import { NOTE_NAMES, SCALES, ALT_TUNINGS } from './music.js';
@@ -9,7 +12,7 @@ import { NOTE_NAMES, SCALES, ALT_TUNINGS } from './music.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const GATE_INPUTS = new Set(['k.trig', 'c.stepclk', 'w.adv']);
+const GATE_INPUTS = new Set(['k.trig', 'c.stepclk', 'w.adv', 'o.gate']);
 const W_POLY = 0, W_STRING = 1, W_BAR = 2, W_CAVE = 3, W_RATIO = 4;
 const BASE_NOTE = 48;
 
@@ -129,8 +132,8 @@ function buildKnob(el) {
   const p = PARAMS[id];
   if (!p) { console.warn('unknown knob', id); return; }
   knobs[id] = new Knob(el, {
-    label: p.label, min: p.min, max: p.max, def: p.def, step: p.step, size,
-    value: state.params[id], fmt: p.fmt, title: el.title,
+    label: p.label, min: p.min, max: p.max, def: p.def, step: p.step, size, bipolar: !!p.bipolar,
+    value: state.params[id], fmt: p.fmt, title: el.title || p.title,
     onChange: (v) => setParam(id, v, { ui: false }),
   });
 }
@@ -446,12 +449,30 @@ function randomPatch() {
     'r.size': 0.3 + r() * 0.6, 'r.mix': 0.1 + r() * 0.35,
     'g.root': Math.floor(r() * 12), 'g.scale': pick([0, 2, 3, 4, 5, 7, 8]),
   };
+  // round 2 dial-ins
+  p['k.wave'] = r() < 0.5 ? 0 : r();
+  p['k.kit'] = r() < 0.5 ? 0 : Math.floor(r() * KITS.length);
+  p['w.damp'] = r() < 0.5 ? 0 : r() * 0.6;
+  p['w.stretch'] = r() < 0.6 ? 0 : (r() - 0.5) * 0.8;
+  p['w.spread'] = r() * 0.5;
+  p['f.env'] = r() < 0.5 ? 0 : r() * 0.6;
+  p['f.envDec'] = 0.2 + r() * 0.5;
+  p['l.shape'] = Math.floor(r() * 7);
+  p['l.sync'] = pick([0, 3, 4, 5]);
+  if (r() < 0.55) {
+    Object.assign(p, {
+      'o.wave': pick([0.667, 1, 0.5, 0.85, 0.33]), 'o.pw': 0.2 + r() * 0.6, 'o.sub': r() * 0.5, 'o.det': r() < 0.5 ? 0 : r() * 0.6,
+      'o.oct': pick([-1, 0, 0, 1]), 'o.glide': r() < 0.3 ? r() * 0.4 : 0, 'o.dec': 0.25 + r() * 0.4,
+      'o.lvlW': r() * 0.4, 'o.lvlD': 0.2 + r() * 0.4, 'o.src': pick([0, 0, 1, 2]),
+    });
+  }
   const scale = SCALES[p['g.scale']].steps;
   const seq = () => Array.from({ length: 3 + Math.floor(r() * 6) }, () => p['g.root'] + pick(scale) + (r() < 0.25 ? 12 : 0));
   const trigSrc = pick(['u.div2', 'u.div2', 'u.div4', 'u.div4', 'c.tri', 'u.div3']);
   if (trigSrc !== 'c.tri' && r() < 0.35) p['amt.k.trig'] = 0.6; // accents only
   const extras = [['c.step', 'w.noteL'], ['c.step', 'w.noteR'], ['c.step', 'k.pitch'], ['u.drift', 'f.lp'], ['k.env', 'f.lp'],
-    ['u.drift', 'w.decay'], ['u.div3', 'w.adv'], ['c.tri', 's.fold'], ['w.trigR', 'k.drum'], ['c.step', 'k.drum']];
+    ['u.drift', 'w.decay'], ['u.div3', 'w.adv'], ['c.tri', 's.fold'], ['w.trigR', 'k.drum'], ['c.step', 'k.drum'],
+    ['l.out', 'k.wave'], ['l.out', 'o.pwm'], ['l.out', 'f.lp'], ['l.out', 'o.wave'], ['u.drift', 'w.decay']];
   const cables = [[trigSrc, 'k.trig']];
   for (let i = 0; i < 1 + Math.floor(r() * 3); i++) {
     const c = pick(extras);
@@ -541,6 +562,66 @@ function drawResonators(m) {
   }
 }
 
+// ---- waveform previews ----
+const KASTLE_TABLES = (() => {
+  const sine = [], tri = [], saw = [], sq = [];
+  for (let i = 0; i < 256; i++) {
+    sine.push(127.5 - 127.5 * Math.cos((Math.PI * 2 * i) / 256) * 1); // display only
+    tri.push(i < 128 ? i * 2 : 255 - (i - 128) * 2);
+    saw.push(i);
+    sq.push(i < 128 ? 255 : 1);
+  }
+  // the firmware sine starts at its minimum, like this cosine
+  return [sine, tri, saw, sq, ...Object.values(KASTLE_WAVES).map((t) => t.map((v) => v + 128))];
+})();
+
+function kastleWaveAt(pos, i) {
+  const x = Math.max(0, Math.min(1, pos)) * (KASTLE_TABLES.length - 1);
+  const k = Math.min(KASTLE_TABLES.length - 2, Math.floor(x));
+  const f = x - k;
+  return (KASTLE_TABLES[k][i] * (1 - f) + KASTLE_TABLES[k + 1][i] * f) / 127.5 - 1;
+}
+
+function voiceWaveAt(wave, pw, ph) {
+  const shape = (k) => (k === 0 ? Math.sin(Math.PI * 2 * ph) : k === 1 ? (ph < 0.5 ? 4 * ph - 1 : 3 - 4 * ph) : k === 2 ? 2 * ph - 1 : ph < pw ? 1 : -1);
+  const x = wave * 3, seg = x >= 3 ? 2 : Math.floor(x), f = x - seg;
+  return shape(seg) * (1 - f) + shape(Math.min(3, seg + 1)) * f;
+}
+
+function drawWave(canvas, fn, color) {
+  sizeCanvas(canvas);
+  const c = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  c.clearRect(0, 0, w, h);
+  c.strokeStyle = 'rgba(255,255,255,0.08)';
+  c.beginPath(); c.moveTo(0, h / 2); c.lineTo(w, h / 2); c.stroke();
+  c.strokeStyle = color;
+  c.lineWidth = Math.max(1.5, w / 160);
+  c.lineJoin = 'round';
+  c.beginPath();
+  const n = 256, pad = h * 0.14;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const y = h / 2 - fn(t) * (h / 2 - pad);
+    const x = t * w;
+    if (i) c.lineTo(x, y); else c.moveTo(x, y);
+  }
+  c.stroke();
+}
+
+function drawWavePreviews() {
+  const P = state.params;
+  drawWave($('#k-wave-view'), (t) => kastleWaveAt(P['k.wave'], Math.min(255, Math.floor(t * 2 * 256) % 256)), '#e8b64c');
+  drawWave($('#v-wave-view'), (t) => {
+    const ph = (t * 2) % 1;
+    const dt = 0;
+    let y = voiceWaveAt(P['o.wave'], P['o.pw'], ph);
+    if (P['o.sub'] > 0.001) y += (t < 0.5 ? 1 : -1) * P['o.sub'];
+    if (P['o.det'] > 0.001) y += voiceWaveAt(P['o.wave'], P['o.pw'], (ph * (1 + P['o.det'] * 0.06) + 0.37) % 1) * P['o.det'];
+    return (y + dt) / (1 + P['o.det'] * 0.6 + P['o.sub'] * 0.6);
+  }, '#c4d65a');
+}
+
 const stepCells = $('#step-cells');
 for (let i = 0; i < 16; i++) { const c = document.createElement('i'); c.appendChild(document.createElement('b')); stepCells.appendChild(c); }
 
@@ -568,6 +649,15 @@ function frame() {
       const idx = m.seqIdx[ch];
       $$('.chip.seq', ui.info).forEach((c, j) => c.classList.toggle('playing', j === idx));
     }
+    const lfoLed = $('#lfo-led');
+    lfoLed.style.opacity = String(0.25 + m.lfo * 0.75);
+    lamp(lfoLed, m.lfo > 0.5);
+    lamp($('#v-led'), m.venv > 0.05);
+    const vOn = state.params['o.lvlW'] > 0 || state.params['o.lvlD'] > 0;
+    if (vOn && m.vhz) {
+      const midi = 69 + 12 * Math.log2(m.vhz / state.params['w.a3']);
+      $('#voice-readout').textContent = `${noteName(Math.round(midi))} · ${m.vhz.toFixed(1)} Hz`;
+    } else $('#voice-readout').textContent = vOn ? '' : 'off: raise To Wingie or Direct';
     $('#vu-l').style.transform = `scaleY(${Math.min(1, m.peak[0])})`;
     $('#vu-r').style.transform = `scaleY(${Math.min(1, m.peak[1])})`;
     lamp($('#lim'), m.limit);
@@ -633,6 +723,11 @@ function init() {
   buildSelect($('#scale'), 'g.scale', SCALES.map((s, i) => [i, s.name]));
   buildSelect($('#tuning'), 'w.tuning', [[-1, 'Equal temperament'], ...ALT_TUNINGS.map((t, i) => [i, t.name])]);
   buildSelect($('#sync'), 'd.sync', SYNC_LABELS.map((l, i) => [i, i ? `${l} of the clock` : 'Free (Time knob)']));
+  buildSelect($('#kit'), 'k.kit', KITS.map((k, i) => [i, k.name]));
+  buildSelect($('#voice-src'), 'o.src', VOICE_SOURCES.map((n, i) => [i, n]));
+  buildSelect($('#lfo-sync'), 'l.sync', LFO_SYNC.map((n, i) => [i, n]));
+  buildSeg($('#lfo-shape'), 'l.shape', LFO_SHAPES);
+  buildSeg($('#voice-trig'), 'o.trig', VOICE_TRIGS);
 
   // derived UI
   const bpm = $('#bpm');
@@ -642,8 +737,11 @@ function init() {
     if (id === 'c.lock') document.body.classList.toggle('bpm-locked', v > 0.5);
     if (id === 'd.sync') document.body.classList.toggle('echo-synced', v > 0);
     if (id === 'g.root' || id === 'g.scale') renderWingie();
+    if (id === 'l.sync') document.body.classList.toggle('lfo-synced', v > 0);
+    if (id === 'k.wave' || id.startsWith('o.')) { cancelAnimationFrame(drawWavePreviews.raf); drawWavePreviews.raf = requestAnimationFrame(drawWavePreviews); }
   });
-  for (const id of ['k.drum', 'c.bpm', 'c.lock', 'd.sync']) for (const fn of listeners) fn(id, state.params[id]);
+  for (const id of ['k.drum', 'c.bpm', 'c.lock', 'd.sync', 'l.sync', 'k.wave']) for (const fn of listeners) fn(id, state.params[id]);
+  window.addEventListener('resize', () => drawWavePreviews());
   bpm.addEventListener('change', () => {
     const v = Math.min(300, Math.max(30, Math.round(Number(bpm.value) || 120)));
     setParam('c.bpm', v);
@@ -768,7 +866,7 @@ function init() {
   patch.set(state.cables);
   pushAll();
   renderWingie();
-  requestAnimationFrame(() => patch.redraw());
+  requestAnimationFrame(() => { patch.redraw(); drawWavePreviews(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => patch.redraw());
   requestAnimationFrame(frame);
 }
