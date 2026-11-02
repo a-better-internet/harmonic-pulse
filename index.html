@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harmonic Pulse</title>
+  <meta name="description" content="A browser instrument: an emulated Bastl Kastle Drum patched into a Wingie2-style modal resonator, shaped by filters, wave shapers, tape echo and reverb.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23121110'/%3E%3Cpath d='M4 20h5l3-9 4 15 4-19 3 13h5' fill='none' stroke='%23e8b64c' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Harmonic Pulse</h1>
+      <p>Kastle Drum <span aria-hidden="true">→</span> Wingie resonator</p>
+    </div>
+    <button id="power" class="power" aria-pressed="false" title="Start / stop audio">
+      <span class="power-led" aria-hidden="true"></span><span class="power-txt">Start audio</span>
+    </button>
+    <div class="top-group">
+      <label class="field"><span>Patch</span>
+        <select id="preset"></select>
+      </label>
+      <button id="save" class="btn" title="Save the current patch in this browser">Save</button>
+      <button id="del" class="btn" title="Delete the selected saved patch">Delete</button>
+      <button id="random" class="btn" title="Randomise a new patch">Random</button>
+      <button id="export" class="btn" title="Download the patch as JSON">Export</button>
+      <label class="btn file-btn" title="Load a patch JSON file">Import<input id="import" type="file" accept="application/json,.json" hidden></label>
+    </div>
+    <div class="top-group">
+      <label class="field"><span>Key</span><select id="root"></select></label>
+      <label class="field"><span>Scale</span><select id="scale"></select></label>
+    </div>
+    <div class="top-group">
+      <button id="rec" class="btn rec" aria-pressed="false" title="Record the output to a WAV file">● Rec</button>
+      <button id="cables-toggle" class="btn" aria-pressed="false" title="Fade the cables so the panel is easier to reach">Fade cables</button>
+      <button id="help-btn" class="btn" aria-expanded="false" aria-controls="help">Guide</button>
+    </div>
+    <canvas id="scope" width="360" height="64" aria-label="Output oscilloscope"></canvas>
+  </header>
+
+  <p id="preset-note" class="preset-note"></p>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <section id="help" class="help" hidden>
+    <div class="help-cols">
+      <div>
+        <h2>How it flows</h2>
+        <p>The <b>Kastle Drum</b> fires short synthetic drum hits into the <b>Wingie</b>, a bank of 9 tuned resonators on each side. Each hit rings the resonators at musical pitches, so the drum becomes a melody. After that come the <b>filters</b>, <b>colour</b> (a post wave shaper), <b>tape echo</b> and <b>reverb</b>.</p>
+        <p>For melodic pulses, set a Wingie side to <b>String</b> or <b>Bar</b>. Tap a key to set its note, or hold <kbd>Shift</kbd> (or switch on <b>Append</b>) to add notes. Each hit louder than the threshold steps to the next note.</p>
+      </div>
+      <div>
+        <h2>Patching</h2>
+        <p>Drag from any jack to another jack, or click one and then the other. <b>Square</b> jacks are outputs and <b>round</b> jacks are inputs. Each input has a small attenuverter knob. Click a cable to unplug it, or double-click a jack to unplug everything on it.</p>
+        <p><b>TRIG</b> is the Kastle's three-level input. Each change between low, mid and high fires a hit, and a one-step change is an accent. A square wave gives full hits on both edges, so ÷2 → TRIG plays 16ths in BPM lock. The triangle walks through all three levels, giving four accented hits per cycle.</p>
+      </div>
+      <div>
+        <h2>Keys</h2>
+        <p><kbd>Space</kbd> hits the drum, <kbd>Esc</kbd> cancels patching and <kbd>Shift</kbd>-click appends a sequence note. You can drag knobs, scroll them or use the arrow keys, and double-click a knob to reset it. MIDI notes on channel 1 go to Wingie L, channel 2 to Wingie R, and channel 3 alternates between them. Channel 10 hits the drum.</p>
+      </div>
+    </div>
+  </section>
+
+  <main id="rack" class="rack">
+    <svg id="cables" class="cables" aria-hidden="true"></svg>
+
+    <!-- KASTLE DRUM -->
+    <section class="module kastle" aria-labelledby="k-title">
+      <header class="mod-head">
+        <h2 id="k-title">Kastle <em>Drum</em></h2>
+        <span class="readout" id="k-style" title="Drum style">FM</span>
+      </header>
+      <div class="mod-body kastle-body">
+        <div class="sub">
+          <h3>VCO</h3>
+          <div class="knob-row">
+            <div data-knob="k.drum"></div>
+            <div data-knob="k.pitch"></div>
+            <div data-knob="k.decay"></div>
+          </div>
+          <div class="knob-row tight">
+            <div data-knob="k.range" data-size="sm" title="Enhancement: stretches the envelope (×1 is the hardware)"></div>
+            <div data-toggle="k.qnt" title="Enhancement: quantise PITCH to the key"></div>
+            <div data-toggle="k.xy" title="Firmware XY mode: NOISES outputs the envelope"></div>
+            <button id="hit" class="hit" title="Hit (Space)">Hit</button>
+          </div>
+          <div class="env-meters" aria-hidden="true">
+            <div class="meter-row"><span>ENV</span><i><b id="k-env"></b></i></div>
+            <div class="meter-row"><span>NOI</span><i><b id="k-env2"></b></i></div>
+            <div class="trig-lamps"><span class="lamp" id="k-t0"></span><span class="lamp" id="k-t1"></span><span class="lamp" id="k-t2"></span><small>trig</small></div>
+          </div>
+        </div>
+        <div class="sub">
+          <h3>Clock · Step</h3>
+          <div class="knob-row">
+            <div data-knob="c.rate"></div>
+            <div data-knob="c.glide"></div>
+            <div class="bpm-box">
+              <label class="field small"><span>BPM</span><input id="bpm" type="number" min="30" max="300" step="1" value="120"></label>
+              <div class="btn-pair">
+                <div data-toggle="c.lock"></div>
+                <button id="tap" class="btn small">Tap</button>
+              </div>
+            </div>
+          </div>
+          <div class="step-ctl">
+            <div class="seg" id="step-mode" role="radiogroup" aria-label="Step mode"></div>
+            <div data-toggle="c.run"></div>
+            <button id="regen" class="btn small" title="New random step values">New steps</button>
+            <span class="lamp clk" id="c-led" title="Clock"></span>
+          </div>
+          <div class="step-cells" id="step-cells" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-in="k.trig"></div>
+        <div class="jack-cell" data-in="k.drum"></div>
+        <div class="jack-cell" data-in="k.pitch" data-amt-label="Pitch mod"></div>
+        <div class="jack-cell" data-in="k.decay"></div>
+        <div class="jack-cell" data-in="c.rate"></div>
+        <div class="jack-cell" data-in="c.stepclk"></div>
+        <span class="patch-sep"></span>
+        <div class="jack-cell" data-out="k.out"></div>
+        <div class="jack-cell" data-out="k.noise"></div>
+        <div class="jack-cell" data-out="k.env"></div>
+        <div class="jack-cell" data-out="c.clk"></div>
+        <div class="jack-cell" data-out="c.tri"></div>
+        <div class="jack-cell" data-out="c.step"></div>
+      </div>
+    </section>
+
+    <!-- UTILITY -->
+    <section class="module util" aria-labelledby="u-title">
+      <header class="mod-head"><h2 id="u-title">Divide · Drift</h2></header>
+      <div class="mod-body">
+        <div class="knob-row"><div data-knob="u.drift"></div></div>
+        <div class="div-lamps" aria-hidden="true">
+          <span class="lamp" id="d2"></span><span class="lamp" id="d3"></span><span class="lamp" id="d4"></span><span class="lamp" id="d8"></span>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-out="u.div2"></div>
+        <div class="jack-cell" data-out="u.div3"></div>
+        <div class="jack-cell" data-out="u.div4"></div>
+        <div class="jack-cell" data-out="u.div8"></div>
+        <div class="jack-cell" data-out="u.drift"></div>
+      </div>
+    </section>
+
+    <!-- SHAPER -->
+    <section class="module shape" aria-labelledby="s-title">
+      <header class="mod-head"><h2 id="s-title">Shape</h2><span class="readout dim">pre-resonator</span></header>
+      <div class="mod-body">
+        <div class="knob-row">
+          <div data-knob="k.outLvl"></div>
+          <div data-knob="k.noiseLvl"></div>
+          <div data-toggle="s.feed" title="Off: OUT + NOISES feed both sides. On: OUT feeds left and NOISES feeds right."></div>
+        </div>
+        <div class="knob-row">
+          <div data-knob="s.drive"></div>
+          <div data-knob="s.fold"></div>
+          <div data-knob="s.crush"></div>
+          <div data-knob="s.down"></div>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-in="s.fold"></div>
+      </div>
+    </section>
+
+    <!-- WINGIE -->
+    <section class="module wingie" aria-labelledby="w-title">
+      <header class="mod-head">
+        <h2 id="w-title">Wingie</h2>
+        <span class="readout dim">modal resonator · 2 × 9</span>
+        <button id="panic" class="btn small" title="Silence the resonators and effects">Panic</button>
+      </header>
+      <div class="mod-body wingie-body">
+        <div class="w-side" data-ch="0"></div>
+        <div class="w-center">
+          <canvas id="res-view" width="420" height="150" aria-label="Resonator energies"></canvas>
+          <div class="fader-row">
+            <div data-knob="w.mix"></div>
+            <div data-knob="w.decay"></div>
+            <div data-knob="w.vol"></div>
+          </div>
+          <div class="knob-row tight">
+            <div data-knob="w.pre" data-size="sm"></div>
+            <div data-knob="w.post" data-size="sm"></div>
+            <div data-knob="w.a3" data-size="sm"></div>
+            <div data-toggle="w.hold" title="Freeze: 60 s resonator decay"></div>
+            <div data-toggle="w.guard" title="Anti-feedback energy guard (from Wingie2 v4)"></div>
+          </div>
+          <label class="field"><span>Tuning</span><select id="tuning"></select></label>
+        </div>
+        <div class="w-side" data-ch="1"></div>
+      </div>
+      <details class="w-edit">
+        <summary>Edit caves &amp; ratios</summary>
+        <div id="w-edit-body" class="w-edit-body"></div>
+      </details>
+      <div class="patch-row">
+        <div class="jack-cell" data-in="w.noteL"></div>
+        <div class="jack-cell" data-in="w.noteR"></div>
+        <div class="jack-cell" data-in="w.adv"></div>
+        <div class="jack-cell" data-in="w.decay"></div>
+        <span class="patch-sep"></span>
+        <div class="jack-cell" data-out="w.trigL"></div>
+        <div class="jack-cell" data-out="w.trigR"></div>
+        <div class="jack-cell" data-out="w.env"></div>
+      </div>
+    </section>
+
+    <!-- FILTER -->
+    <section class="module filter" aria-labelledby="f-title">
+      <header class="mod-head"><h2 id="f-title">Filter</h2></header>
+      <div class="mod-body">
+        <div class="knob-row">
+          <div data-knob="f.hp"></div>
+          <div data-knob="f.hpRes" data-size="sm"></div>
+        </div>
+        <div class="knob-row">
+          <div data-knob="f.lp"></div>
+          <div data-knob="f.lpRes" data-size="sm"></div>
+          <div data-toggle="f.slope"></div>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-in="f.hp"></div>
+        <div class="jack-cell" data-in="f.lp"></div>
+      </div>
+    </section>
+
+    <!-- COLOR -->
+    <section class="module color" aria-labelledby="x-title">
+      <header class="mod-head"><h2 id="x-title">Colour</h2></header>
+      <div class="mod-body">
+        <div class="seg" id="color-type" role="radiogroup" aria-label="Shaper type"></div>
+        <div class="knob-row"><div data-knob="x.amt"></div></div>
+      </div>
+    </section>
+
+    <!-- SPACE -->
+    <section class="module space" aria-labelledby="sp-title">
+      <header class="mod-head"><h2 id="sp-title">Space</h2><span class="readout dim" id="echo-readout"></span></header>
+      <div class="mod-body">
+        <div class="knob-row">
+          <div data-knob="d.time"></div>
+          <div data-knob="d.fb"></div>
+          <div data-knob="d.tone"></div>
+          <div data-knob="d.wow"></div>
+          <div data-knob="d.mix"></div>
+        </div>
+        <div class="knob-row tight">
+          <label class="field"><span>Echo sync</span><select id="sync"></select></label>
+          <div data-toggle="d.pp"></div>
+        </div>
+        <div class="knob-row">
+          <div data-knob="r.size"></div>
+          <div data-knob="r.damp"></div>
+          <div data-knob="r.mix"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MASTER -->
+    <section class="module master" aria-labelledby="m-title">
+      <header class="mod-head"><h2 id="m-title">Out</h2></header>
+      <div class="mod-body">
+        <div class="knob-row"><div data-knob="m.vol"></div></div>
+        <div class="vu" aria-hidden="true"><i><b id="vu-l"></b></i><i><b id="vu-r"></b></i></div>
+        <span class="lamp lim" id="lim" title="Limiter active"></span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Emulates the Kastle Drum VCO firmware by Václav Peloušek / Bastl Instruments (CC BY-SA) and the Wingie2 DSP and firmware by Meng Qi, Dave Seidel and contributors (GPL-3.0). This is an independent project and is not affiliated with either maker.</p>
+  </footer>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
