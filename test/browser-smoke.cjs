@@ -60,9 +60,21 @@ const { chromium } = require('playwright');
   await left.locator('.w-key[data-i="2"]').click();
   await left.locator('.w-key[data-i="5"]').click({ modifiers: ['Shift'] });
   await left.locator('.w-key[data-i="9"]').click({ modifiers: ['Shift'] });
-  check((await left.locator('.chip.seq').count()) === 3, 'sequence built from keys');
+  check((await left.locator('.step').count()) === 3, 'sequence built from keys');
   await page.waitForTimeout(1500);
-  check((await left.locator('.chip.seq.playing').count()) === 1, 'sequence step is highlighted while playing');
+  check((await left.locator('.step.playing').count()) === 1, 'sequence step is highlighted while playing');
+
+  // per-step accents: click cycles normal > accent > ghost > rest, right-click drops
+  const step1 = () => left.locator('.step[data-j="1"]');
+  const accSeq = [];
+  for (let i = 0; i < 4; i++) { await step1().click(); accSeq.push(await step1().getAttribute('data-acc')); }
+  check(accSeq.join('') === '1230', 'step click cycles accent, ghost, rest, normal: ' + accSeq.join(''));
+  await step1().click();
+  await page.waitForTimeout(500);
+  const saved2 = await page.evaluate(() => JSON.parse(localStorage.getItem('hp.autosave')).wingie.acc[0]);
+  check(saved2[1] === 1, 'accent is stored with the patch: ' + JSON.stringify(saved2));
+  await left.locator('.step[data-j="2"]').click({ button: 'right' });
+  check((await left.locator('.step').count()) === 2, 'right-click drops a step');
 
   // cycle through all modes
   for (let i = 0; i < 5; i++) { await left.locator('.w-mode').click(); await page.waitForTimeout(150); }
@@ -98,6 +110,29 @@ const { chromium } = require('playwright');
   });
   check(inked > 100, 'voice waveform preview is drawn');
   check((await page.locator('.module').count()) === 9, 'nine modules on the rack');
+
+  // X/Y pad: dragging sweeps the assigned knobs, latch off springs back
+  await page.selectOption('#xy-x', { label: 'Filter cutoff' });
+  await page.selectOption('#xy-y', { label: 'Wingie decay' });
+  const lp0 = Number(await page.locator('[data-knob="f.lp"] .knob-dial').getAttribute('aria-valuenow'));
+  const pad = await page.locator('#xy-pad').boundingBox();
+  await page.mouse.move(pad.x + pad.width * 0.9, pad.y + pad.height * 0.1);
+  await page.mouse.down();
+  await page.mouse.move(pad.x + pad.width * 0.1, pad.y + pad.height * 0.9, { steps: 6 });
+  const lpLow = Number(await page.locator('[data-knob="f.lp"] .knob-dial').getAttribute('aria-valuenow'));
+  const decLow = Number(await page.locator('[data-knob="w.decay"] .knob-dial').getAttribute('aria-valuenow'));
+  await page.mouse.up();
+  check(Math.abs(lpLow - (0.25 + 0.7 * 0.1)) < 0.03 && Math.abs(decLow - (0.15 + 0.8 * 0.1)) < 0.03, `pad sets both knobs (lp ${lpLow}, decay ${decLow})`);
+  check(/Filter cutoff/.test(await page.locator('#xy-readout').textContent()), 'pad readout names its targets');
+  await page.click('button.toggle:has-text("Latch")');
+  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(pad.x + pad.width * 0.95, pad.y + pad.height * 0.5, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const lpBack = Number(await page.locator('[data-knob="f.lp"] .knob-dial').getAttribute('aria-valuenow'));
+  check(Math.abs(lpBack - lpLow) < 0.01, `latch off springs the knob back (${lpBack} vs ${lpLow})`);
+  void lp0;
 
   // every factory preset
   const opts = await page.locator('#preset option').evaluateAll((os) => os.map((o) => o.value).filter((v) => v.startsWith('f:')));

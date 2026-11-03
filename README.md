@@ -83,6 +83,16 @@ The **Divide · Drift** module is an addition. Its ÷2, ÷3, ÷4 and ÷8 square 
   - **Cave**: three editable banks per side, chosen by the octave switch; keys mute resonators.
   - **Ratio**: 3 voices × an editable 9-ratio profile.
 - **The threshold sequencer from String/Bar mode.** Tap keys to set a sequence; `Shift`-click or **Append** adds notes. Each hit louder than the threshold steps to the next note. This is what turns a drum loop into a melody.
+- **Per-step accents** (an addition). Click a step to cycle it through these levels; right-click or long-press removes it.
+
+  | Level | Resonator | Voice and filter envelope |
+  |---|---|---|
+  | **Normal** | as the hardware | as struck |
+  | **Accent** | struck harder (brighter, more clip) and rings louder | struck 35% harder, deeper sweep |
+  | **Ghost** | struck softly and rings quietly | struck softly |
+  | **Rest** | not struck; the previous note keeps ringing at its pitch | silent |
+
+  The Voice and filter envelope follow the accents of the side the Voice takes its pitch from. Accents also come in over MIDI: velocity 110 and up is an accent, and below 45 is a ghost. The **Acc L** jack outputs the current left step's level (accent 1, normal 0.5, ghost 0.25, rest 0), so it can be patched to anything.
 
   Kastle hits often overlap without falling back under the threshold, so the follower also re-arms on a relative drop. That way every hit still advances the note.
 - **The firmware's eight alternate tunings** (Centaur, Harp of New Albion, Well-Tuned Piano…) and A3 tuning.
@@ -100,7 +110,12 @@ The **Divide · Drift** module is an addition. Its ÷2, ÷3, ÷4 and ÷8 square 
   - **Routing:** **To Wingie** sends it into the resonators as a pitched exciter. **Direct** mixes it in after them, before the filters.
 - **LFO.** Sine, triangle, ramp up, ramp down, square, sample & hold and smooth random. It runs free (0.02–20 Hz) or phase-locked to the clock at 1–64 ticks per cycle.
 - **Filter envelope.** Every Kastle hit opens the low-pass (or closes it, with a negative amount), with its own decay. **Band-pass** turns the low filter into a resonant band-pass.
-- **Master** lives in the top bar, so it is always within reach.
+- **Perform.** An X/Y pad for live playing:
+  - **X → / Y ↑** pick which knob each axis sweeps, each over a range chosen to sound good. The choices are filter cutoff, resonance and envelope; Wingie decay, mix, damp, stretch and spread; Kastle wave, pitch, decay and drum style; Voice wave, width and level; drive, fold and colour; and echo and reverb. The knobs move with your finger.
+  - **Latch** on keeps the puck where you let go. With it off, the puck springs back and the knobs return to where they were, which suits sweep-and-release gestures.
+  - **X, Y and Gate** are patch outputs. Gate is high while you press, so Gate → TRIG plays the drum with your finger, and Gate → Adv steps the melody.
+  - Keyboard: focus the pad, then use the arrow keys (`Shift` for fine moves). Hold `Space` to gate, and `Home` centres it.
+- **Colour** now sits inside the Filter module, and **Master** lives in the top bar.
 
 ## Dialling in a sound
 
@@ -108,7 +123,7 @@ A good order to work in:
 
 1. **Pulse first.** Patch ÷2 (16ths), ÷4 (8ths) or ÷3 (dotted) into TRIG, and set BPM. Lower the TRIG attenuverter to about 60% for softer accented hits.
 2. **Drum colour.** DRUM picks the style, and DECAY sets length (below about 40% the pitch drops like a kick). WAVE reshapes the oscillator, and Kit changes the samples.
-3. **Melody.** Put a Wingie side in String or Bar and tap a sequence. Patch Step into Note L or Note R for variations that stay in the key.
+3. **Melody.** Put a Wingie side in String or Bar and tap a sequence. Click steps to accent the downbeats, ghost the in-betweens and drop a rest for breathing room. Patch Step into Note L or Note R for variations that stay in the key.
 4. **Material.** Wingie Decay sets the ring length. Damp makes it woodier, Stretch makes it more bell-like, and Spread makes it wider.
 5. **Voice on top.** Raise Direct for a sequencer-bass line that plays the same melody, or To Wingie to excite the resonators with a pitched tone. Try a saw with Unison and a little Glide.
 6. **Shape it.** Use the filter cutoff, resonance and Env amt for a squelch on every hit. An LFO into LP or PWM adds a slow sweep, and Colour adds saturation.
@@ -125,6 +140,7 @@ Square jacks are outputs and round jacks are inputs. Drag between two jacks, or 
 | ÷2, ÷3, ÷4, ÷8, Drift | Wingie Note L, Note R (quantised to the key), Adv, Decay |
 | Wingie Trig L, Trig R, Env | Shape Fold, Filter LP, HP |
 | Voice Out, Env; LFO | Kastle Wave; Voice Pitch, Wave, PWM, Gate; LFO Rate |
+| Wingie Acc L; Perform X, Y, Gate | |
 
 The Wingie's trigger and envelope outputs can be patched back into the Kastle to create feedback rhythms.
 
@@ -172,6 +188,8 @@ npm test
 - resonator pitch accuracy;
 - the energy guard;
 - scale quantisation;
+- accents: rests hold pitch and still advance, accents ring harder than ghosts, the Voice strike level, and the Acc L jack;
+- the Perform pad's patch outputs;
 - that UI, preset and DSP ids stay in sync;
 - that every preset renders audibly.
 
@@ -179,7 +197,7 @@ npm test
 npm run test:browser
 ```
 
-`npm run test:browser` drives the real page in headless Chromium and needs Playwright and the dev server on port 8765. It covers patching by drag and by click, Alt-click unplugging, building a sequence, cycling modes, the new modules, presets, saving and WAV recording.
+`npm run test:browser` drives the real page in headless Chromium and needs Playwright and the dev server on port 8765. It covers patching by drag and by click, Alt-click unplugging, building a sequence, cycling and dropping step accents, cycling modes, the new modules, the X/Y pad (knob sweeps and latch spring-back), presets, saving and WAV recording.
 
 `tools/extract_kastle_samples.py` regenerates `src/dsp/kastle-samples.js` from the firmware folder: `TR_HH_AT.h`, every `bastlAttinySamples/*_AT.h` sample, and the CHEB3–6 wavetables.
 
@@ -191,7 +209,7 @@ src/dsp/harmonic-pulse-processor.js   the whole signal path (AudioWorklet)
 src/dsp/kastle-samples.js        sample tables from the Kastle firmware (generated)
 src/engine.js                    AudioContext, worklet messaging, WAV recorder
 src/main.js                      UI controller, presets, MIDI
-src/ui/knob.js, src/ui/patchbay.js
+src/ui/knob.js, src/ui/patchbay.js, src/ui/xypad.js
 src/params.js, src/patch-def.js, src/presets.js, src/music.js, src/kits.js
 ```
 

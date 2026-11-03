@@ -5,6 +5,31 @@ export const DRUM_STYLES = ['FM', 'NOISE', 'T&H', 'KICK', 'SNARE', 'CLAP', 'HAT'
 export const STEP_MODES = ['RND', '8', '16'];
 export const SYNC_LABELS = ['free', '1 tick', '2 ticks', '3 ticks', '4 ticks', '6 ticks', '8 ticks', '12 ticks', '16 ticks'];
 export const COLOR_TYPES = ['Tape', 'Tube', 'Fold', 'Fuzz'];
+// X/Y pad targets: each axis sweeps one knob between lo and hi.
+export const PAD_TARGETS = [
+  { id: '', label: 'None' },
+  { id: 'f.lp', label: 'Filter cutoff', lo: 0.25, hi: 0.95 },
+  { id: 'f.lpRes', label: 'Filter resonance', lo: 0, hi: 0.85 },
+  { id: 'f.env', label: 'Filter env', lo: 0, hi: 0.9 },
+  { id: 'w.decay', label: 'Wingie decay', lo: 0.15, hi: 0.95 },
+  { id: 'w.mix', label: 'Wingie mix', lo: 0.3, hi: 1 },
+  { id: 'w.damp', label: 'Wingie damp', lo: 0, hi: 1 },
+  { id: 'w.stretch', label: 'Wingie stretch', lo: -0.8, hi: 0.8 },
+  { id: 'w.spread', label: 'Wingie spread', lo: 0, hi: 1 },
+  { id: 'k.wave', label: 'Kastle wave', lo: 0, hi: 1 },
+  { id: 'k.pitch', label: 'Kastle pitch', lo: 0.15, hi: 0.85 },
+  { id: 'k.decay', label: 'Kastle decay', lo: 0.45, hi: 0.9 },
+  { id: 'k.drum', label: 'Kastle drum style', lo: 0, hi: 1 },
+  { id: 'o.wave', label: 'Voice wave', lo: 0, hi: 1 },
+  { id: 'o.pw', label: 'Voice width', lo: 0.1, hi: 0.9 },
+  { id: 'o.lvlD', label: 'Voice level', lo: 0, hi: 0.9 },
+  { id: 's.drive', label: 'Drive', lo: 0, hi: 0.8 },
+  { id: 's.fold', label: 'Fold', lo: 0, hi: 0.8 },
+  { id: 'x.amt', label: 'Colour', lo: 0, hi: 0.7 },
+  { id: 'd.fb', label: 'Echo repeats', lo: 0, hi: 0.95 },
+  { id: 'd.mix', label: 'Echo mix', lo: 0, hi: 0.6 },
+  { id: 'r.mix', label: 'Reverb', lo: 0, hi: 0.7 },
+];
 export const LFO_SHAPES = ['Sine', 'Tri', 'Up', 'Down', 'Sqr', 'S&H', 'Rnd'];
 export const LFO_SYNC = ['Free (Rate knob)', '1 tick', '2 ticks', '4 ticks (1 beat)', '8 ticks', '16 ticks (1 bar)', '32 ticks', '64 ticks'];
 export const VOICE_SOURCES = ['Wingie L note', 'Wingie R note', 'Step (quantised)', 'Key root'];
@@ -119,6 +144,13 @@ export const PARAMS = {
   'w.damp': { label: 'Damp', def: 0, fmt: pct, title: 'Higher partials die sooner: 0 is the Wingie, up is wood and felt' },
   'w.stretch': { label: 'Stretch', def: 0, min: -1, max: 1, bipolar: true, fmt: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`, title: 'Bends the partial ratios: up is bell and metal, down is squeezed and gamelan-like' },
   'w.spread': { label: 'Spread', def: 0, fmt: (v) => `${Math.round(v * 40)}¢`, title: 'Detunes left down and right up for stereo width' },
+  // Round 3: performance pad
+  'p.x': { label: 'X', def: 0.5, fmt: (v) => v.toFixed(2) },
+  'p.y': { label: 'Y', def: 0.5, fmt: (v) => v.toFixed(2) },
+  'p.gate': { label: 'Gate', def: 0 },
+  'p.xT': { label: 'X target', def: 1, min: 0, max: 21, step: 1 },
+  'p.yT': { label: 'Y target', def: 4, min: 0, max: 21, step: 1 },
+  'p.latch': { label: 'Latch', def: 1, toggle: true },
   // Master / global
   'm.vol': { label: 'Master', def: 0.6, fmt: pct },
   'g.root': { label: 'Root', def: 9, min: 0, max: 11, step: 1 },

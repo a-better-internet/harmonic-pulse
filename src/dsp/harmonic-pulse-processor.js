@@ -30,6 +30,7 @@ const SOURCES = [
   'u.div2', 'u.div3', 'u.div4', 'u.div8', 'u.drift',
   'w.trigL', 'w.trigR', 'w.env',
   'o.out', 'o.env', 'l.out',
+  'w.accL', 'p.x', 'p.y', 'p.gate',
 ];
 const DESTS = [
   'k.trig', 'k.drum', 'k.pitch', 'k.decay',
@@ -411,6 +412,15 @@ const N_RES = 9;
 const MODAL_BLOCK = 32;
 const BAR_FACTOR = 0.44444;
 const BASE_NOTE = 48;
+// Per-step accent levels: 0 normal, 1 accent, 2 ghost, 3 rest.
+const ACC_GAIN = [1, 1.9, 0.35, 0]; // resonator drive for the step (timbre: harder = brighter, more clip)
+// Ring level for the step. The energy guard and clipper flatten drive
+// differences on hot hits, so accents also set the level; a rest keeps full
+// level so the previous note rings out.
+const ACC_OUT = [1, 1.45, 0.42, 1];
+const ACC_VOICE = [1, 1.35, 0.45, 0]; // voice strike velocity
+const ACC_FENV = [1, 1.5, 0.5, 0.3]; // filter envelope depth
+const ACC_SRC = [0.5, 1, 0.25, 0]; // Acc L jack
 
 function tau2pole(t, sr) { return Math.exp(-1 / (t * sr)); }
 
@@ -437,6 +447,10 @@ class WingieSide {
     this.inDcX = 0; this.inDcY = 0; // fi.dcblocker at the input
     this.fol = 0; this.trig = false; this.trigPeak = 0; this.armLevel = 0; this.holdoff = 0;
     this.seqIdx = 0;
+    this.holdIdx = 0; // last non-rest step: rests keep this pitch
+    this.stepGain = 1; this.stepGainT = 1;
+    this.outGain = 1; this.outGainT = 1;
+    this.advanced = false;
     this.note = BASE_NOTE;
   }
 }
@@ -457,6 +471,7 @@ class Wingie {
       poly: [[48, 52, 55], [60, 64, 67]],
       ratioNotes: [[48, 52, 55], [60, 64, 67]],
       seq: [[0], [0]],
+      acc: [[0], [0]],
       cave: [
         [[62, 115, 218, 411, 777, 1500, 2800, 5200, 11000], [205, 304, 370, 523, 540, 800, 913, 1568, 2400], [212, 425, 531, 637, 1168, 2017, 2336, 2654, 3693]],
         [[62, 115, 218, 411, 777, 1500, 2800, 5200, 11000], [205, 304, 370, 523, 540, 800, 913, 1568, 2400], [212, 425, 531, 637, 1062, 2017, 2336, 2654, 3693]],
@@ -474,8 +489,11 @@ class Wingie {
   setState(st, resetSeq) {
     const s = this.state;
     for (const key of Object.keys(st)) if (key in s) s[key] = st[key];
+    if (!Array.isArray(s.acc) || s.acc.length !== 2) s.acc = [[], []];
     for (let ch = 0; ch < 2; ch++) {
       const len = s.seq[ch].length || 1;
+      if (!Array.isArray(s.acc[ch])) s.acc[ch] = [];
+      if (this.sides[ch].holdIdx >= len) this.sides[ch].holdIdx = 0;
       if (resetSeq && resetSeq[ch]) this.sides[ch].seqIdx = 0;
       if (this.sides[ch].seqIdx >= len) this.sides[ch].seqIdx = 0;
     }
@@ -490,6 +508,24 @@ class Wingie {
     const side = this.sides[ch];
     side.seqIdx = (side.seqIdx + 1) % seq.length;
     this.advanceCount[ch]++;
+    side.advanced = true;
+    this.blockCount = 0; // retune on the very next sample, not up to 32 later
+  }
+
+  // Accent level of the step now playing (always "normal" outside String/Bar).
+  stepAcc(ch) {
+    const s = this.state;
+    const m = s.mode[ch];
+    if (m !== W_STRING && m !== W_BAR) return 0;
+    const a = s.acc[ch][this.sides[ch].seqIdx] | 0;
+    return a >= 0 && a <= 3 ? a : 0;
+  }
+
+  // Index of the step whose pitch is sounding: a rest keeps the previous note.
+  playIdx(ch) {
+    const side = this.sides[ch];
+    if (this.stepAcc(ch) !== 3) side.holdIdx = side.seqIdx;
+    return side.holdIdx;
   }
 
   noteFreq(note, a3, tuning) {
@@ -526,7 +562,7 @@ class Wingie {
       side.note = notes[0] + semis;
     } else if (m === W_STRING || m === W_BAR) {
       const seq = s.seq[ch];
-      const n = (seq[side.seqIdx] || 0) + BASE_NOTE + s.oct[ch] * 12 + (ch ? 12 : 0) + semis;
+      const n = (seq[this.playIdx(ch)] || 0) + BASE_NOTE + s.oct[ch] * 12 + (ch ? 12 : 0) + semis;
       side.note = n;
       const base = this.noteFreq(n, a3, tun);
       for (let i = 0; i < N_RES; i++) {
@@ -846,6 +882,8 @@ const DEFAULT_PARAMS = {
   'l.rate': 0.4, 'l.shape': 0, 'l.sync': 0,
   'f.env': 0, 'f.envDec': 0.4, 'f.bp': 0,
   'w.damp': 0, 'w.stretch': 0, 'w.spread': 0,
+  // round 3: performance pad (targets and latch are handled by the UI)
+  'p.x': 0.5, 'p.y': 0.5, 'p.gate': 0, 'p.xT': 1, 'p.yT': 4, 'p.latch': 1,
 };
 for (const d of DESTS) DEFAULT_PARAMS['amt.' + d] = 0.5;
 // gate inputs pass full level by default
@@ -870,6 +908,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
     this.voice = new Voice(sr);
     this.lfo = new LFO();
     this.lastHits = 0;
+    this.lastHitT = -1e9; this.lastHitVel = 1;
     this.fenv = 0;
     this.voiceHz = 110; this.voiceWave = 0.667; this.voicePw = 0.5;
     this.clock = new ClockChip(sr);
@@ -891,7 +930,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
 
     // per-sample smoothed parameters
     this.smoothIds = ['k.outLvl', 'k.noiseLvl', 's.drive', 'w.mix', 'w.vol', 'w.pre', 'w.post',
-      'f.hp', 'f.lp', 'f.hpRes', 'f.lpRes', 'x.amt', 'd.mix', 'd.fb', 'd.tone', 'r.mix', 'm.vol', 'k.pitch', 'k.drum', 'k.decay'];
+      'f.hp', 'f.lp', 'f.hpRes', 'f.lpRes', 'x.amt', 'd.mix', 'd.fb', 'd.tone', 'r.mix', 'm.vol', 'k.pitch', 'k.drum', 'k.decay', 'p.x', 'p.y'];
     this.sm = {};
     for (const id of this.smoothIds) this.sm[id] = this.P[id];
     this.smA = 1 - Math.exp(-4 / (0.012 * sr)); // updated every 4 samples
@@ -1038,6 +1077,10 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
     const fenvDecay = Math.exp(-4 * 6.9 / (0.01 * Math.pow(200, P['f.envDec']) * sr));
     const voice = this.voice, lfo = this.lfo;
     const voiceTrig = P['o.trig'] | 0;
+    const accSide = (P['o.src'] | 0) === 1 ? 1 : 0; // accents of the side the voice follows
+    const hitWindow = 0.05 * sr;
+    const accA = 1 - Math.exp(-1 / (0.003 * sr));
+    const accOutA = 1 - Math.exp(-1 / (0.008 * sr));
     const voiceOn = P['o.lvlW'] > 0.0005 || P['o.lvlD'] > 0.0005 ||
       this.patched[DST['o.gate']] === 1 || this.cables.some((c) => c[0] === SRC['o.out'] || c[0] === SRC['o.env']);
     const lfoTicks = LFO_SYNC_TICKS[P['l.sync'] | 0] || 0;
@@ -1092,6 +1135,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
       if (k.hits !== this.lastHits) {
         this.lastHits = k.hits;
         const vel = k.accent ? 0.6 : 1;
+        this.lastHitT = this.t + i; this.lastHitVel = vel;
         this.fenv = vel;
         if (voiceTrig === 0) voice.strike(vel);
       }
@@ -1171,13 +1215,15 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
             const st = w.state;
             const m = st.mode[ch];
             let base;
-            if (m === W_STRING || m === W_BAR) base = (st.seq[ch][side.seqIdx] || 0) + BASE_NOTE + st.oct[ch] * 12 + (ch ? 12 : 0);
+            if (m === W_STRING || m === W_BAR) base = (st.seq[ch][w.playIdx(ch)] || 0) + BASE_NOTE + st.oct[ch] * 12 + (ch ? 12 : 0);
             else if (m === W_POLY) base = st.poly[ch][0];
             else if (m === W_RATIO) base = st.ratioNotes[ch][0];
             else base = 48;
             semis = this.quantize(base + clamp(dst[noteDst], -1, 1) * 24) - base;
           }
           w.computeFreqs(ch, P, semis);
+          w.sides[ch].stepGainT = ACC_GAIN[w.stepAcc(ch)];
+          w.sides[ch].outGainT = ACC_OUT[w.stepAcc(ch)];
           w.updateCoeffs(ch, t60, guardOn, 1, 0.998435, clamp(P['w.damp'], 0, 1));
         }
       }
@@ -1218,13 +1264,28 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
           side.trig = true; side.trigPeak = side.fol; side.holdoff = w.holdoff; w.advance(ch);
         }
         const x = xd * vol;
-        const res = w.resonate(side, x, muteStep);
+        side.stepGain += (side.stepGainT - side.stepGain) * accA;
+        const res = w.resonate(side, x * side.stepGain, muteStep);
         let y = cubicnl(res * pre);
         const yd = y - side.dcX + w.dcR * side.dcY; side.dcX = y; side.dcY = yd;
-        y = yd * mix * post + x * (1 - mix);
+        side.outGain += (side.outGainT - side.outGain) * accOutA;
+        y = yd * mix * post * side.outGain + x * (1 - mix);
         if (ch) wr = y; else wl = y;
       }
       this.wEnv = Math.max(Math.abs(wl), this.wEnv * 0.9995);
+
+      // ---- per-step accents reshape the hit that advanced the step ----
+      for (let ch = 0; ch < 2; ch++) {
+        const side = w.sides[ch];
+        if (!side.advanced) continue;
+        side.advanced = false;
+        side.stepGainT = ACC_GAIN[w.stepAcc(ch)];
+        side.outGainT = ACC_OUT[w.stepAcc(ch)];
+        if (ch !== accSide || this.t + i - this.lastHitT > hitWindow) continue;
+        const a = w.stepAcc(ch);
+        if (voiceTrig === 0) voice.vel = this.lastHitVel * ACC_VOICE[a];
+        this.fenv = this.lastHitVel * ACC_FENV[a];
+      }
 
       // ---- filters ----
       let L = wl * 2.5, R = wr * 2.5; // make-up gain after Wingie's post gain
@@ -1393,6 +1454,10 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
       src[S['o.out']] = voice.out;
       src[S['o.env']] = voice.env;
       src[S['l.out']] = lfo.out;
+      src[S['w.accL']] = ACC_SRC[w.stepAcc(0)];
+      src[S['p.x']] = sm['p.x'];
+      src[S['p.y']] = sm['p.y'];
+      src[S['p.gate']] = P['p.gate'] > 0.5 ? 1 : 0;
     }
 
     this.t += n;
@@ -1409,6 +1474,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
         div: this.divCount,
         trigL: w.L.trig, trigR: w.R.trig, folL: w.L.fol, folR: w.R.fol,
         seqIdx: [w.L.seqIdx, w.R.seqIdx], notes: [w.L.note, w.R.note],
+        stepGain: [w.L.stepGain, w.R.stepGain],
         freqs: [Array.from(w.L.freq), Array.from(w.R.freq)],
         energy: e,
         peak: [this.peakL, this.peakR],

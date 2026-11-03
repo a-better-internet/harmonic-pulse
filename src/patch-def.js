@@ -18,6 +18,10 @@ export const OUTPUTS = {
   'o.out': { label: 'Out', title: 'Voice oscillator (audio)' },
   'o.env': { label: 'Env', title: 'Voice envelope' },
   'l.out': { label: 'LFO', title: 'LFO output (0..1)' },
+  'w.accL': { label: 'Acc L', title: 'Accent level of the left step now playing: accent 1, normal 0.5, ghost 0.25, rest 0' },
+  'p.x': { label: 'X', title: 'Perform pad X (0..1)' },
+  'p.y': { label: 'Y', title: 'Perform pad Y (0..1)' },
+  'p.gate': { label: 'Gate', title: 'High while the pad is pressed (into TRIG: hit on press and release)' },
 };
 
 export const INPUTS = {

@@ -26,7 +26,7 @@ export function defaultWingie() {
 export const PRESETS = [
   {
     name: 'Motorik',
-    note: 'Steady 16th-note Kastle FM pulse. Every hit walks the left string through an A-minor riff while the stepped generator nudges the right bar.',
+    note: 'Steady 16th-note Kastle FM pulse. Every hit walks the left string through an accented A-minor riff (with one rest) while the stepped generator nudges the right bar.',
     params: {
       'c.lock': 1, 'c.bpm': 124, 'c.mode': 2,
       'k.drum': 0.04, 'k.pitch': 0.33, 'k.decay': 0.66, 'k.range': 2, 'k.outLvl': 0.85, 'k.noiseLvl': 0.2,
@@ -36,7 +36,7 @@ export const PRESETS = [
       'g.root': 9, 'g.scale': 4, 'amt.w.noteR': 0.3, 'amt.f.lp': 0.25,
     },
     cables: [['u.div2', 'k.trig'], ['c.step', 'w.noteR'], ['u.drift', 'f.lp']],
-    wingie: { mode: [1, 2], oct: [0, -1], seq: [[9, 9, 16, 9, 12, 9, 19, 16], [9, 16, 14, 12]] },
+    wingie: { mode: [1, 2], oct: [0, -1], seq: [[9, 9, 16, 9, 12, 9, 19, 16], [9, 16, 14, 12]], acc: [[1, 2, 0, 2, 1, 2, 3, 0], [1, 0, 2, 0]] },
   },
   {
     name: 'Kosmische Höhle',
@@ -63,7 +63,7 @@ export const PRESETS = [
       'g.root': 4, 'g.scale': 3, 'amt.k.pitch': 0.35, 'amt.w.noteL': 0.25,
     },
     cables: [['u.div2', 'k.trig'], ['c.step', 'k.pitch'], ['c.step', 'w.noteL']],
-    wingie: { mode: [2, 2], oct: [0, -1], seq: [[4, 5, 4, 7], [4, 11, 9, 7]] },
+    wingie: { mode: [2, 2], oct: [0, -1], seq: [[4, 5, 4, 7], [4, 11, 9, 7]], acc: [[1, 0, 2, 0], [1, 3, 0, 2]] },
   },
   {
     name: 'Harmonia Chords',
@@ -125,7 +125,7 @@ export const PRESETS = [
       'g.root': 2, 'g.scale': 4,
     },
     cables: [['u.div2', 'k.trig'], ['l.out', 'f.lp']],
-    wingie: { mode: [1, 2], oct: [0, -1], seq: [[2, 9, 5, 14], [2, 9]] },
+    wingie: { mode: [1, 2], oct: [0, -1], seq: [[2, 9, 5, 14], [2, 9]], acc: [[1, 2, 0, 2], [0, 0]] },
   },
   {
     name: 'Autobahn Pulse',
@@ -141,7 +141,7 @@ export const PRESETS = [
       'g.root': 5, 'g.scale': 1,
     },
     cables: [['u.div2', 'k.trig'], ['l.out', 'o.pwm']],
-    wingie: { mode: [1, 2], oct: [0, -1], seq: [[5, 9, 12, 9, 7, 9, 12, 14], [5, 12, 7]] },
+    wingie: { mode: [1, 2], oct: [0, -1], seq: [[5, 9, 12, 9, 7, 9, 12, 14], [5, 12, 7]], acc: [[1, 0, 2, 0, 1, 0, 3, 2], [0, 0, 0]] },
   },
   {
     name: 'Gamelan Stretch',

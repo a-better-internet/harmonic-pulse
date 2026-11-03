@@ -2,7 +2,8 @@ import { Engine } from './engine.js';
 import { Knob } from './ui/knob.js';
 import { PatchBay } from './ui/patchbay.js';
 import { PARAMS, defaultParams, DRUM_STYLES, STEP_MODES, SYNC_LABELS, COLOR_TYPES, WINGIE_MODES, drumStyle,
-  LFO_SHAPES, LFO_SYNC, VOICE_SOURCES, VOICE_TRIGS } from './params.js';
+  LFO_SHAPES, LFO_SYNC, VOICE_SOURCES, VOICE_TRIGS, PAD_TARGETS } from './params.js';
+import { XYPad } from './ui/xypad.js';
 import { KITS } from './kits.js';
 import { KASTLE_WAVES } from './dsp/kastle-samples.js';
 import { INPUTS, OUTPUTS } from './patch-def.js';
@@ -15,6 +16,10 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 const GATE_INPUTS = new Set(['k.trig', 'c.stepclk', 'w.adv', 'o.gate']);
 const W_POLY = 0, W_STRING = 1, W_BAR = 2, W_CAVE = 3, W_RATIO = 4;
 const BASE_NOTE = 48;
+// Each Wingie side is tinted by its mode LED: Poly, String, Bar, Cave, Ratio.
+const SIDE_COLORS = ['#f1ece0', '#ffd23f', '#ff6a4d', '#b98cff', '#ffe39b'];
+const ACC_NAMES = ['normal', 'accent', 'ghost', 'rest'];
+const ACC_MARKS = ['', '▲', '·', '–'];
 
 // ---------------------------------------------------------------------------
 // storage (never required: private windows may throw)
@@ -40,8 +45,11 @@ function fullDefaults() {
 function normaliseWingie(w) {
   const base = defaultWingie();
   const out = Object.assign(base, clone(w || {}));
+  if (!Array.isArray(out.acc)) out.acc = [[], []];
   for (const ch of [0, 1]) {
     if (!Array.isArray(out.seq[ch]) || !out.seq[ch].length) out.seq[ch] = [9];
+    const acc = Array.isArray(out.acc[ch]) ? out.acc[ch] : [];
+    out.acc[ch] = out.seq[ch].map((_, j) => { const a = acc[j] | 0; return a >= 0 && a <= 3 ? a : 0; });
   }
   return out;
 }
@@ -59,6 +67,7 @@ function sanitiseState(s) {
   if (s && s.params) {
     for (const [k, v] of Object.entries(s.params)) if (k in params && typeof v === 'number' && Number.isFinite(v)) params[k] = v;
   }
+  params['p.gate'] = 0; // never restore a held pad
   const cables = Array.isArray(s && s.cables)
     ? s.cables.filter((c) => Array.isArray(c) && c[0] in OUTPUTS && c[1] in INPUTS)
     : [];
@@ -252,11 +261,13 @@ function pressKey(ch, i, append) {
     sendWingie();
   } else if (m === W_STRING || m === W_BAR) {
     if (append) {
-      if (w.seq[ch].length >= 64) w.seq[ch].shift();
+      if (w.seq[ch].length >= 64) { w.seq[ch].shift(); w.acc[ch].shift(); }
       w.seq[ch].push(i);
+      w.acc[ch].push(0);
       sendWingie();
     } else {
       w.seq[ch] = [i];
+      w.acc[ch] = [0];
       sendWingie(ch ? [false, true] : [true, false]);
     }
   } else if (m === W_CAVE) {
@@ -281,6 +292,7 @@ function buildWingieSide(el, ch) {
     </div>
     <div class="w-keys" role="group" aria-label="Note keys"></div>
     <div class="w-info"></div>
+    <p class="w-hint">Click a step: accent › ghost › rest. Right-click or long-press removes it.</p>
     <div class="w-tools">
       <button type="button" class="toggle w-append" aria-pressed="false" title="Add notes to the sequence instead of replacing it (or hold Shift)"><span class="toggle-led"></span><span>Append</span></button>
       <button type="button" class="btn small w-clear" title="Reset the sequence to its first note">Clear</button>
@@ -314,10 +326,50 @@ function buildWingieSide(el, ch) {
   });
   $('.w-clear', el).addEventListener('click', () => {
     state.wingie.seq[ch] = [state.wingie.seq[ch][0] ?? 9];
+    state.wingie.acc[ch] = [0];
     sendWingie(ch ? [false, true] : [true, false]);
   });
   buildKnob($('[data-knob]', el));
-  wingieUI[ch] = { el, keys: $$('.w-key', el), info: $('.w-info', el), led: $('.w-led', el), name: $('.w-mode-name', el), trig: $('.w-trig', el), oct: $$('.w-oct button', el) };
+  const info = $('.w-info', el);
+  // step cells: click cycles the accent; right-click, Shift-click or Delete drops the step
+  const dropStep = (j) => {
+    const w = state.wingie;
+    if (w.seq[ch].length > 1) { w.seq[ch].splice(j, 1); w.acc[ch].splice(j, 1); sendWingie(); }
+  };
+  // touch: long-press drops a step (iOS doesn't fire contextmenu reliably)
+  let pressTimer = 0, pressFired = false;
+  const cancelPress = () => { clearTimeout(pressTimer); pressTimer = 0; };
+  info.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('.step');
+    if (!b || e.pointerType !== 'touch') return;
+    pressFired = false;
+    cancelPress();
+    pressTimer = setTimeout(() => { pressFired = true; dropStep(Number(b.dataset.j)); }, 550);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) info.addEventListener(ev, cancelPress);
+  info.addEventListener('click', (e) => {
+    const b = e.target.closest('.step');
+    if (!b) return;
+    if (pressFired) { pressFired = false; return; }
+    const j = Number(b.dataset.j);
+    if (e.shiftKey) { dropStep(j); return; }
+    const acc = state.wingie.acc[ch];
+    acc[j] = ((acc[j] | 0) + 1) % 4;
+    sendWingie();
+    const again = $(`.step[data-j="${j}"]`, info);
+    if (again) again.focus();
+  });
+  info.addEventListener('contextmenu', (e) => {
+    const b = e.target.closest('.step');
+    if (!b) return;
+    e.preventDefault();
+    dropStep(Number(b.dataset.j));
+  });
+  info.addEventListener('keydown', (e) => {
+    const b = e.target.closest('.step');
+    if (b && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); dropStep(Number(b.dataset.j)); }
+  });
+  wingieUI[ch] = { el, keys: $$('.w-key', el), info, hint: $('.w-hint', el), led: $('.w-led', el), name: $('.w-mode-name', el), trig: $('.w-trig', el), oct: $$('.w-oct button', el) };
 }
 
 function renderWingie() {
@@ -329,6 +381,8 @@ function renderWingie() {
     ui.name.textContent = WINGIE_MODES[m].name;
     ui.led.style.background = WINGIE_MODES[m].led;
     ui.el.dataset.mode = String(m);
+    ui.el.style.setProperty('--side', SIDE_COLORS[m]);
+    ui.hint.hidden = !(m === W_STRING || m === W_BAR);
     ui.oct.forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.o) === w.oct[ch])));
     const lit = new Set();
     const bank = w.oct[ch] + 1;
@@ -351,16 +405,19 @@ function renderWingie() {
     } else if (m === W_STRING || m === W_BAR) {
       const seq = w.seq[ch];
       seq.forEach((n) => lit.add(((n % 12) + 12) % 12));
-      info = seq.map((n, j) => `<button type="button" class="chip seq" data-j="${j}" title="Step ${j + 1}: ${noteName(n + channelBase(ch))} (click to remove)">${noteName(n + channelBase(ch))}</button>`).join('');
+      info = seq.map((n, j) => {
+        const a = w.acc[ch][j] | 0;
+        const name = noteName(n + channelBase(ch));
+        return `<button type="button" class="step" data-j="${j}" data-acc="${a}" aria-label="Step ${j + 1}: ${name}, ${ACC_NAMES[a]}"`
+          + ` title="Step ${j + 1}: ${name}, ${ACC_NAMES[a]}. Click to change the accent; right-click to drop it.">`
+          + `<span class="mark" aria-hidden="true">${ACC_MARKS[a]}</span><span class="note">${name}</span><span class="lvl" aria-hidden="true"></span></button>`;
+      }).join('');
     } else {
       info = `<span class="chip">bank ${['low', 'mid', 'high'][bank]}</span>`;
     }
     ui.keys.forEach((k, i) => k.classList.toggle('lit', lit.has(i)));
     ui.info.innerHTML = info;
-    $$('.chip.seq', ui.info).forEach((c) => c.addEventListener('click', () => {
-      const seq = w.seq[ch];
-      if (seq.length > 1) { seq.splice(Number(c.dataset.j), 1); sendWingie(); }
-    }));
+    if (lastMeter) $$('.step', ui.info).forEach((c, j) => c.classList.toggle('playing', j === lastMeter.seqIdx[ch]));
   }
   renderEditor();
 }
@@ -424,6 +481,7 @@ function fillPresetSelect(selected) {
 
 function loadState(s, note) {
   state = sanitiseState(s);
+  if (xyPad) xyPad.set(state.params['p.x'], state.params['p.y'], false);
   for (const [id, k] of Object.entries(knobs)) k.set(state.params[id]);
   for (const [id, t] of Object.entries(toggles)) t.setAttribute('aria-pressed', state.params[id] > 0.5 ? 'true' : 'false');
   for (const id of Object.keys(state.params)) for (const fn of listeners) fn(id, state.params[id]);
@@ -468,6 +526,7 @@ function randomPatch() {
   }
   const scale = SCALES[p['g.scale']].steps;
   const seq = () => Array.from({ length: 3 + Math.floor(r() * 6) }, () => p['g.root'] + pick(scale) + (r() < 0.25 ? 12 : 0));
+  const accents = () => Array.from({ length: 8 }, () => (r() < 0.55 ? 0 : pick([1, 1, 2, 3])));
   const trigSrc = pick(['u.div2', 'u.div2', 'u.div4', 'u.div4', 'c.tri', 'u.div3']);
   if (trigSrc !== 'c.tri' && r() < 0.35) p['amt.k.trig'] = 0.6; // accents only
   const extras = [['c.step', 'w.noteL'], ['c.step', 'w.noteR'], ['c.step', 'k.pitch'], ['u.drift', 'f.lp'], ['k.env', 'f.lp'],
@@ -485,7 +544,7 @@ function randomPatch() {
     params: Object.assign(fullDefaults(), p),
     cables,
     wingie: normaliseWingie({
-      mode: modes, oct: [0, pick([-1, -1, 0])], seq: [seq(), seq()],
+      mode: modes, oct: [0, pick([-1, -1, 0])], seq: [seq(), seq()], acc: [accents(), accents()],
       poly: [[root, root + scale[2 % scale.length], root + 7], [root + 12, root + 12 + scale[1], root + 19]],
     }),
   };
@@ -538,12 +597,12 @@ function drawResonators(m) {
   const fx = (f) => (Math.log(f / 16) / Math.log(16000 / 16)) * (w - 16 * dpr) + 8 * dpr;
   rctx.font = `${10 * dpr}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   // octave grid
-  rctx.strokeStyle = 'rgba(30,26,20,0.08)';
+  rctx.strokeStyle = 'rgba(239,217,168,0.07)';
   for (let f = 32.7; f < 16000; f *= 2) { const x = fx(f); rctx.beginPath(); rctx.moveTo(x, 0); rctx.lineTo(x, h); rctx.stroke(); }
-  rctx.fillStyle = 'rgba(30,26,20,0.07)';
+  rctx.fillStyle = 'rgba(239,217,168,0.08)';
   rctx.fillRect(0, lane - 0.5 * dpr, w, dpr);
   if (!m) return;
-  const cols = ['#b5832a', '#2f8f86'];
+  const cols = [SIDE_COLORS[state.wingie.mode[0]], SIDE_COLORS[state.wingie.mode[1]]];
   for (let ch = 0; ch < 2; ch++) {
     const y0 = ch ? h : lane;
     for (let i = 0; i < 9; i++) {
@@ -557,8 +616,10 @@ function drawResonators(m) {
     }
     rctx.globalAlpha = 1;
     const note = m.notes[ch];
-    rctx.fillStyle = 'rgba(30,26,20,0.55)';
+    rctx.fillStyle = cols[ch];
+    rctx.globalAlpha = 0.75;
     rctx.fillText(`${ch ? 'R' : 'L'} ${note >= 0 ? noteName(Math.round(note)) : 'cave'}`, 6 * dpr, (ch ? lane : 0) + 12 * dpr);
+    rctx.globalAlpha = 1;
   }
 }
 
@@ -647,7 +708,7 @@ function frame() {
       const ui = wingieUI[ch];
       lamp(ui.trig, ch ? m.trigR : m.trigL);
       const idx = m.seqIdx[ch];
-      $$('.chip.seq', ui.info).forEach((c, j) => c.classList.toggle('playing', j === idx));
+      $$('.step', ui.info).forEach((c, j) => c.classList.toggle('playing', j === idx));
     }
     const lfoLed = $('#lfo-led');
     lfoLed.style.opacity = String(0.25 + m.lfo * 0.75);
@@ -666,6 +727,76 @@ function frame() {
   }
   drawResonators(m && engine.running ? m : null);
   requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------------------
+// X/Y performance pad
+// ---------------------------------------------------------------------------
+let xyPad = null;
+let padRestore = null; // knob values captured on press, for spring-back
+
+function padTarget(axis) { return PAD_TARGETS[state.params[axis === 'x' ? 'p.xT' : 'p.yT'] | 0] || PAD_TARGETS[0]; }
+
+function padReadout() {
+  const part = (axis) => {
+    const t = padTarget(axis);
+    if (!t.id) return `${axis.toUpperCase()} ${state.params['p.' + axis].toFixed(2)}`;
+    return `${t.label} ${PARAMS[t.id].fmt(state.params[t.id])}`;
+  };
+  $('#xy-readout').textContent = `${part('x')} · ${part('y')}`;
+}
+
+function padMove(x, y) {
+  setParam('p.x', x, { ui: false });
+  setParam('p.y', y, { ui: false });
+  for (const [axis, v] of [['x', x], ['y', y]]) {
+    const t = padTarget(axis);
+    if (t.id) setParam(t.id, t.lo + (t.hi - t.lo) * v);
+  }
+  padReadout();
+}
+
+function initPad() {
+  xyPad = new XYPad($('#xy-pad'), $('#xy-canvas'), {
+    onMove: padMove,
+    onGate: (on) => {
+      if (on) {
+        padRestore = {};
+        for (const axis of ['x', 'y']) { const t = padTarget(axis); if (t.id) padRestore[t.id] = state.params[t.id]; }
+      }
+      setParam('p.gate', on ? 1 : 0, { ui: false });
+    },
+    onRelease: (start) => {
+      if (state.params['p.latch'] > 0.5 || !padRestore) return;
+      // spring back: glide the puck home and ease the knobs to where they were
+      const from = {}, to = padRestore;
+      for (const id of Object.keys(to)) from[id] = state.params[id];
+      const x0 = state.params['p.x'], y0 = state.params['p.y'], t0 = performance.now();
+      const tick = (now) => {
+        if (xyPad.down) return;
+        const k = 1 - Math.pow(1 - Math.min(1, (now - t0) / 280), 3);
+        const x = x0 + (start[0] - x0) * k, y = y0 + (start[1] - y0) * k;
+        xyPad.set(x, y, false);
+        setParam('p.x', x, { ui: false });
+        setParam('p.y', y, { ui: false });
+        for (const id of Object.keys(to)) setParam(id, from[id] + (to[id] - from[id]) * k);
+        padReadout();
+        if (k < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    },
+    getLabels: () => [padTarget('x').label, padTarget('y').label],
+  });
+  xyPad.set(state.params['p.x'], state.params['p.y'], false);
+  buildSelect($('#xy-x'), 'p.xT', PAD_TARGETS.map((t, i) => [i, t.label]));
+  buildSelect($('#xy-y'), 'p.yT', PAD_TARGETS.map((t, i) => [i, t.label]));
+  listeners.push((id) => {
+    if (id === 'p.xT' || id === 'p.yT') { xyPad.draw(); padReadout(); }
+    else if (id === 'p.x' || id === 'p.y') { /* moved by the pad itself */ }
+    else if (PAD_TARGETS.some((t) => t.id === id)) padReadout();
+  });
+  $('#xy-center').addEventListener('click', () => xyPad.glideTo(0.5, 0.5));
+  padReadout();
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +829,7 @@ function onMidi(e) {
       sendWingie();
     } else if (m === W_STRING || m === W_BAR) {
       w.seq[ch] = [d1 - channelBase(ch)];
+      w.acc[ch] = [d2 >= 110 ? 1 : d2 < 45 ? 2 : 0];
       sendWingie(ch ? [false, true] : [true, false]);
     }
   } else if (type === 0xb0) {
@@ -728,6 +860,7 @@ function init() {
   buildSelect($('#lfo-sync'), 'l.sync', LFO_SYNC.map((n, i) => [i, n]));
   buildSeg($('#lfo-shape'), 'l.shape', LFO_SHAPES);
   buildSeg($('#voice-trig'), 'o.trig', VOICE_TRIGS);
+  initPad();
 
   // derived UI
   const bpm = $('#bpm');
@@ -860,7 +993,7 @@ function init() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
-    if (e.code === 'Space' && !e.target.closest('button,[role=slider]')) { e.preventDefault(); engine.hit(true); }
+    if (e.code === 'Space' && !e.target.closest('button,[role=slider],.xy-pad')) { e.preventDefault(); engine.hit(true); }
   });
 
   patch.set(state.cables);

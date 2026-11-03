@@ -52,7 +52,8 @@
       <div>
         <h2>How it flows</h2>
         <p>The <b>Kastle Drum</b> fires short synthetic drum hits into the <b>Wingie</b>, a bank of 9 tuned resonators on each side. Each hit rings the resonators at musical pitches, so the drum becomes a melody. After that come the <b>filters</b>, <b>colour</b> (a post wave shaper), <b>tape echo</b> and <b>reverb</b>. The <b>Voice</b> adds a sine-to-pulse oscillator that plays the same melody, struck by each hit.</p>
-        <p>For melodic pulses, set a Wingie side to <b>String</b> or <b>Bar</b>. Tap a key to set its note, or hold <kbd>Shift</kbd> (or switch on <b>Append</b>) to add notes. Each hit louder than the threshold steps to the next note.</p>
+        <p>For melodic pulses, set a Wingie side to <b>String</b> or <b>Bar</b>. Tap a key to set its note, or hold <kbd>Shift</kbd> (or switch on <b>Append</b>) to add notes. Each hit louder than the threshold steps to the next note. Click a step to cycle its <b>accent</b>: normal, accent, ghost, rest. Right-click or long-press a step to remove it.</p>
+        <p>The <b>Perform</b> pad drives two knobs at once. Pick them with <b>X →</b> and <b>Y ↑</b>. Its X, Y and Gate jacks can be patched like any other output.</p>
       </div>
       <div>
         <h2>Patching</h2>
@@ -241,12 +242,13 @@
         <div class="jack-cell" data-out="w.trigL"></div>
         <div class="jack-cell" data-out="w.trigR"></div>
         <div class="jack-cell" data-out="w.env"></div>
+        <div class="jack-cell" data-out="w.accL"></div>
       </div>
     </section>
 
     <!-- FILTER -->
     <section class="module filter" aria-labelledby="f-title">
-      <header class="mod-head"><h2 id="f-title">Filter</h2></header>
+      <header class="mod-head"><h2 id="f-title">Filter · Colour</h2></header>
       <div class="mod-body">
         <div class="knob-row">
           <div data-knob="f.hp"></div>
@@ -261,6 +263,11 @@
           <div data-knob="f.env"></div>
           <div data-knob="f.envDec" data-size="sm"></div>
           <div data-toggle="f.bp" title="Turns the low-pass into a band-pass: a vocal, wah-like focus"></div>
+        </div>
+        <div class="sub sub-colour">
+          <h3>Colour</h3>
+          <div class="seg" id="color-type" role="radiogroup" aria-label="Shaper type"></div>
+          <div class="knob-row"><div data-knob="x.amt"></div></div>
         </div>
       </div>
       <div class="patch-row">
@@ -311,12 +318,28 @@
       </div>
     </section>
 
-    <!-- COLOR -->
-    <section class="module color" aria-labelledby="x-title">
-      <header class="mod-head"><h2 id="x-title">Colour</h2></header>
-      <div class="mod-body">
-        <div class="seg" id="color-type" role="radiogroup" aria-label="Shaper type"></div>
-        <div class="knob-row"><div data-knob="x.amt"></div></div>
+
+    <!-- PERFORM -->
+    <section class="module perform" aria-labelledby="p-title">
+      <header class="mod-head"><h2 id="p-title">Perform</h2><span class="readout dim" id="xy-readout"></span></header>
+      <div class="mod-body perform-body">
+        <div class="xy-pad" id="xy-pad" tabindex="0" role="application"
+             aria-label="X/Y performance pad. Drag, or use the arrow keys; hold Space to gate." aria-roledescription="X/Y pad">
+          <canvas id="xy-canvas"></canvas>
+        </div>
+        <div class="perform-ctl">
+          <label class="field"><span>X →</span><select id="xy-x"></select></label>
+          <label class="field"><span>Y ↑</span><select id="xy-y"></select></label>
+        </div>
+        <div class="perform-row">
+          <div data-toggle="p.latch" title="On: the puck stays where you let go. Off: it springs back and the knobs return to where they were."></div>
+          <button type="button" class="btn small" id="xy-center">Centre</button>
+        </div>
+      </div>
+      <div class="patch-row">
+        <div class="jack-cell" data-out="p.x"></div>
+        <div class="jack-cell" data-out="p.y"></div>
+        <div class="jack-cell" data-out="p.gate"></div>
       </div>
     </section>
 
