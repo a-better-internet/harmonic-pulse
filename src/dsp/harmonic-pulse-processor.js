@@ -942,8 +942,12 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
     this.meterEvery = Math.floor(sr / 30);
     this.peakL = 0; this.peakR = 0;
     this.wEnv = 0;
+    // Recorder: captures the exact samples sent to the output (after the
+    // master limiter), in 4096-frame interleaved chunks, numbered so the main
+    // thread can prove none went missing.
     this.recording = false;
     this.recBuf = null; this.recPos = 0;
+    this.recFrames = 0; this.recPeak = 0; this.recSeq = 0; this.recId = 0;
     this.errored = false;
     this.t = 0;
 
@@ -984,9 +988,17 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
         this.wingie.panic(); this.echo.clear(); this.verb.clear();
         break;
       case 'rec':
-        this.recording = !!msg.on;
-        if (this.recording) { this.recBuf = new Float32Array(8192); this.recPos = 0; }
-        else if (this.recBuf) { this.flushRec(); this.recBuf = null; }
+        if (msg.on) {
+          this.recording = true;
+          this.recBuf = new Float32Array(8192); this.recPos = 0;
+          this.recFrames = 0; this.recPeak = 0; this.recSeq = 0; this.recId = msg.id | 0;
+        } else if (this.recording) {
+          this.recording = false;
+          this.flushRec();
+          this.recBuf = null;
+          // the handshake: every chunk above was posted before this message
+          this.port.postMessage({ type: 'recDone', id: this.recId, frames: this.recFrames, chunks: this.recSeq, peak: this.recPeak });
+        }
         break;
       default:
         break;
@@ -996,7 +1008,7 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
   flushRec() {
     if (!this.recBuf || this.recPos === 0) return;
     const chunk = this.recBuf.slice(0, this.recPos);
-    this.port.postMessage({ type: 'rec', data: chunk }, [chunk.buffer]);
+    this.port.postMessage({ type: 'rec', id: this.recId, seq: this.recSeq++, data: chunk }, [chunk.buffer]);
     this.recPos = 0;
   }
 
@@ -1424,12 +1436,15 @@ class HarmonicPulseProcessor extends AudioWorkletProcessor {
       if (!Number.isFinite(L) || !Number.isFinite(R)) { L = 0; R = 0; this.panicAll(); }
       oL[i] = L;
       if (oR !== oL) oR[i] = R;
+      const pk2 = Math.max(Math.abs(L), Math.abs(R));
       if (Math.abs(L) > this.peakL) this.peakL = Math.abs(L);
       if (Math.abs(R) > this.peakR) this.peakR = Math.abs(R);
 
       if (this.recording && this.recBuf) {
         this.recBuf[this.recPos++] = L;
         this.recBuf[this.recPos++] = R;
+        this.recFrames++;
+        if (pk2 > this.recPeak) this.recPeak = pk2;
         if (this.recPos >= this.recBuf.length) { this.flushRec(); this.recBuf = new Float32Array(8192); }
       }
 

@@ -147,13 +147,28 @@ const { chromium } = require('playwright');
   await page.click('#save');
   check((await page.locator('#preset optgroup[label="Saved"] option').count()) === 1, 'save stores a user patch');
 
-  // record a moment
+  // record a take: 24-bit by default, complete, unclipped
+  check((await page.locator('#rec-format').inputValue()) === '24', 'recording defaults to 24-bit');
   await page.click('#rec');
-  await page.waitForTimeout(700);
+  const t0 = Date.now();
+  await page.waitForTimeout(1600);
+  check(/■ 0:01/.test(await page.locator('#rec').textContent()), 'rec button shows elapsed time');
   const dl = page.waitForEvent('download');
   await page.click('#rec');
+  const heldMs = Date.now() - t0;
   const file = await dl;
-  check(/\.wav$/.test(file.suggestedFilename()), 'recording downloads a wav');
+  check(/24bit\.wav$/.test(file.suggestedFilename()), 'recording downloads a 24-bit wav: ' + file.suggestedFilename());
+  const wav = require('fs').readFileSync(await file.path());
+  const bits = wav.readUInt16LE(34), ch = wav.readUInt16LE(22), sr = wav.readUInt32LE(24);
+  const dataBytes = wav.readUInt32LE(40);
+  const secs = dataBytes / (ch * 3) / sr;
+  check(bits === 24 && ch === 2 && wav.readUInt16LE(20) === 1 && dataBytes + 44 === wav.length, `valid 24-bit stereo header (${bits} bit, ${ch} ch, ${sr} Hz)`);
+  check(Math.abs(secs - heldMs / 1000) < 0.35, `take length ${secs.toFixed(2)} s matches ${(heldMs / 1000).toFixed(2)} s held`);
+  let peak24 = 0;
+  for (let o = 44; o + 2 < wav.length; o += 3) { let x = wav[o] | (wav[o + 1] << 8) | (wav[o + 2] << 16); if (x & 0x800000) x -= 0x1000000; peak24 = Math.max(peak24, Math.abs(x)); }
+  check(peak24 > 1000 && peak24 < 8388607, `take has signal and no full-scale samples (peak ${(20 * Math.log10(peak24 / 8388607)).toFixed(1)} dBFS)`);
+  await page.waitForTimeout(200);
+  check(/Saved 0:0\d · 24-bit · peak -\d/.test(await page.locator('#toast').textContent()), 'save report: ' + await page.locator('#toast').textContent());
 
   const peak = await page.evaluate(() => document.querySelector('#vu-l').style.transform);
   check(/scaleY\(0\.[0-9]*[1-9]/.test(peak), 'output meter shows signal: ' + peak);

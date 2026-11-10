@@ -64,7 +64,12 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 .btn:hover { border-color: var(--ink-faint); }
 .btn.small { padding: 3px 8px; font-size: 11px; }
 .btn[aria-pressed=true] { border-color: var(--gold); color: var(--gold); }
-.btn.rec[aria-pressed=true] { border-color: var(--red); color: #fff; background: #5a1a15; }
+.btn.rec[aria-pressed=true] { border-color: var(--red); color: #fff; background: #5a1a15; font-variant-numeric: tabular-nums; animation: rec-pulse 1.6s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { box-shadow: 0 0 0 3px rgba(226, 87, 76, 0.25); } }
+.rec-group { display: inline-flex; }
+.rec-group .btn.rec { border-radius: 6px 0 0 6px; min-width: 72px; }
+.rec-format { background: var(--bg-2); border: 1px solid var(--line); border-left: 0; border-radius: 0 6px 6px 0; padding: 4px 6px; font: 12px var(--sans); color: var(--ink-dim); }
+.rec-format:disabled { opacity: 0.5; }
 .file-btn { cursor: pointer; }
 .power {
   display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px 7px 10px;

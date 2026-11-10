@@ -4,6 +4,7 @@ import { PatchBay } from './ui/patchbay.js';
 import { PARAMS, defaultParams, DRUM_STYLES, STEP_MODES, SYNC_LABELS, COLOR_TYPES, WINGIE_MODES, drumStyle,
   LFO_SHAPES, LFO_SYNC, VOICE_SOURCES, VOICE_TRIGS, PAD_TARGETS } from './params.js';
 import { XYPad } from './ui/xypad.js';
+import { dbfs } from './wav.js';
 import { KITS } from './kits.js';
 import { KASTLE_WAVES } from './dsp/kastle-samples.js';
 import { INPUTS, OUTPUTS } from './patch-def.js';
@@ -85,12 +86,12 @@ function autosave() {
   saveTimer = setTimeout(() => store.set('hp.autosave', state), 400);
 }
 
-function toast(msg) {
+function toast(msg, ms = 2600) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 2600);
+  toast.timer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 // ---------------------------------------------------------------------------
@@ -903,6 +904,7 @@ function init() {
   power.addEventListener('click', async () => {
     try {
       if (engine.running) {
+        if (engine.recording) await stopRecording(); // finish the take before the audio thread pauses
         await engine.suspend();
       } else {
         const first = !engine.ctx;
@@ -965,17 +967,17 @@ function init() {
 
   // recording
   const rec = $('#rec');
+  const recFormat = $('#rec-format');
+  recFormat.value = String(store.get('hp.recBits', 24));
+  recFormat.addEventListener('change', () => store.set('hp.recBits', Number(recFormat.value)));
   rec.addEventListener('click', async () => {
-    if (rec.getAttribute('aria-pressed') === 'true') {
-      rec.setAttribute('aria-pressed', 'false');
-      rec.textContent = '● Rec';
-      const blob = await engine.stopRecording();
-      if (blob) download(blob, `harmonic-pulse-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.wav`);
-    } else {
+    if (engine.recording) await stopRecording();
+    else {
       if (!engine.running) { toast('Start the audio first'); return; }
       engine.startRecording();
       rec.setAttribute('aria-pressed', 'true');
-      rec.textContent = '■ Stop';
+      recFormat.disabled = true;
+      tickRecTimer();
     }
   });
 
@@ -1002,6 +1004,39 @@ function init() {
   requestAnimationFrame(() => { patch.redraw(); drawWavePreviews(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => patch.redraw());
   requestAnimationFrame(frame);
+}
+
+function fmtTime(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function tickRecTimer() {
+  const rec = $('#rec');
+  if (!engine.recording) return;
+  rec.textContent = `■ ${fmtTime(engine.recordedSeconds())}`;
+  setTimeout(tickRecTimer, 250);
+}
+
+async function stopRecording() {
+  const rec = $('#rec');
+  const recFormat = $('#rec-format');
+  rec.textContent = 'Saving…';
+  rec.disabled = true;
+  const bits = Number(recFormat.value) || 24;
+  const r = await engine.stopRecording({ bits });
+  rec.disabled = false;
+  rec.setAttribute('aria-pressed', 'false');
+  rec.textContent = '● Rec';
+  recFormat.disabled = false;
+  if (!r || r.frames === 0) { toast('Nothing was recorded'); return; }
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  download(r.blob, `harmonic-pulse-${stamp}-${bits === 32 ? '32f' : bits + 'bit'}.wav`);
+  const peak = Number.isFinite(dbfs(r.peak)) ? `${dbfs(r.peak).toFixed(1)} dBFS` : 'silent';
+  let msg = `Saved ${fmtTime(r.seconds)} · ${bits === 32 ? '32-bit float' : bits + '-bit'} · peak ${peak}`;
+  if (!r.complete) msg += ' · warning: the audio stopped mid-take, so the end may be missing';
+  else if (r.clipped) msg += ` · ${r.clipped} samples clipped`;
+  toast(msg, 7000);
 }
 
 function download(blob, name) {

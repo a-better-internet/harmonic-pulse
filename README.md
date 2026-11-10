@@ -160,7 +160,10 @@ The Wingie's trigger and envelope outputs can be patched back into the Kastle to
   - **Init**: a clean start.
 
   **Random** builds a new, musical patch. Save keeps patches in this browser, and Export/Import moves them around as JSON. The current state autosaves.
-- **Record** writes a 16-bit stereo WAV of the output.
+- **Record** captures exactly what you hear: the final output after the master limiter, sample for sample.
+  - **Formats:** 24-bit WAV is the default, with ±1 LSB TPDF dither. 16-bit WAV and 32-bit float WAV are also offered; the float one is bit-exact.
+  - **Complete takes:** the audio thread numbers each block it sends. On Stop it sends a closing message with the total frame count. The file is written only after that message arrives, and the count is checked, so the end of a take is never cut off. Switching the audio off mid-take finishes the take first.
+  - **No clipping:** the limiter keeps the output peak at about −3.2 dBFS, so a recording never reaches full scale. The save report shows the take's length, format and peak.
 - **Keys:**
   - `Space`: hit the drum.
   - `Esc`: cancel patching.
@@ -190,6 +193,7 @@ npm test
 - scale quantisation;
 - accents: rests hold pitch and still advance, accents ring harder than ghosts, the Voice strike level, and the Acc L jack;
 - the Perform pad's patch outputs;
+- recording: every output frame captured in order, with the closing message; WAV headers and sample values in 24-bit, 16-bit and 32-bit float; dither stays within one LSB; and no preset clips, even with master, drive and feedback at maximum;
 - that UI, preset and DSP ids stay in sync;
 - that every preset renders audibly.
 
@@ -197,7 +201,7 @@ npm test
 npm run test:browser
 ```
 
-`npm run test:browser` drives the real page in headless Chromium and needs Playwright and the dev server on port 8765. It covers patching by drag and by click, Alt-click unplugging, building a sequence, cycling and dropping step accents, cycling modes, the new modules, the X/Y pad (knob sweeps and latch spring-back), presets, saving and WAV recording.
+`npm run test:browser` drives the real page in headless Chromium and needs Playwright and the dev server on port 8765. It covers patching by drag and by click, Alt-click unplugging, building a sequence, cycling and dropping step accents, cycling modes, the new modules, the X/Y pad (knob sweeps and latch spring-back), presets, saving, and a real 24-bit recording, whose header, length and peak it checks.
 
 `tools/extract_kastle_samples.py` regenerates `src/dsp/kastle-samples.js` from the firmware folder: `TR_HH_AT.h`, every `bastlAttinySamples/*_AT.h` sample, and the CHEB3–6 wavetables.
 

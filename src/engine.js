@@ -4,6 +4,7 @@
 import { KASTLE_SAMPLES, KASTLE_WAVES } from './dsp/kastle-samples.js';
 import { KITS } from './kits.js';
 import { SCALES, ALT_TUNINGS } from './music.js';
+import { encodeWav } from './wav.js';
 
 export class Engine {
   constructor({ onMeter, onError } = {}) {
@@ -12,7 +13,7 @@ export class Engine {
     this.analyser = null;
     this.onMeter = onMeter || (() => {});
     this.onError = onError || ((e) => console.error(e));
-    this.recChunks = null;
+    this.rec = null;
     this.state = { params: {}, cables: [], wingie: null };
   }
 
@@ -61,7 +62,7 @@ export class Engine {
   onMessage(msg) {
     if (!msg) return;
     if (msg.type === 'meter') this.onMeter(msg);
-    else if (msg.type === 'rec' && this.recChunks) this.recChunks.push(msg.data);
+    else if (msg.type === 'rec' || msg.type === 'recDone') this.onRecMessage(msg);
     else if (msg.type === 'error') this.onError(new Error(msg.message));
   }
 
@@ -85,45 +86,63 @@ export class Engine {
   regenerate() { this.post({ type: 'regen' }); }
   panic() { this.post({ type: 'panic' }); }
 
+  // ---- recording -----------------------------------------------------------
+  // The worklet streams the exact output samples in numbered chunks. Stopping
+  // waits for its 'recDone' handshake (sent after the final chunk), so the end
+  // of a take is never cut off, then checks the frame count before encoding.
+
+  get recording() { return !!this.rec; }
+
   startRecording() {
     if (!this.node) return false;
-    this.recChunks = [];
-    this.post({ type: 'rec', on: true });
+    const id = ((this.rec && this.rec.id) || 0) + 1;
+    this.rec = { id, chunks: [], samples: 0, nextSeq: 0, gaps: 0, startedAt: performance.now(), done: null };
+    this.post({ type: 'rec', on: true, id });
     return true;
   }
 
-  // Resolves with a 16-bit stereo WAV blob.
-  stopRecording() {
+  // Seconds captured so far (counted from the chunks that have arrived).
+  recordedSeconds() {
+    if (!this.rec || !this.ctx) return 0;
+    return this.rec.samples / 2 / this.ctx.sampleRate;
+  }
+
+  // Resolves with { blob, frames, seconds, peak, clipped, complete, bits }.
+  stopRecording({ bits = 24 } = {}) {
+    const rec = this.rec;
+    if (!rec) return Promise.resolve(null);
     return new Promise((resolve) => {
-      if (!this.recChunks) { resolve(null); return; }
+      const finish = (done) => {
+        clearTimeout(timer);
+        this.rec = null;
+        const sr = this.ctx.sampleRate;
+        const out = encodeWav(rec.chunks, sr, { bits });
+        const complete = !!done && rec.gaps === 0 && out.frames === done.frames;
+        resolve({
+          blob: new Blob([out.buffer], { type: 'audio/wav' }),
+          frames: out.frames, seconds: out.seconds, peak: out.peak, clipped: out.clipped,
+          complete, expectedFrames: done ? done.frames : null, bits,
+        });
+      };
+      rec.done = finish;
+      // Safety net only: if the audio thread has stopped (tab closed, context
+      // suspended mid-take) we still deliver what arrived, flagged incomplete.
+      const timer = setTimeout(() => finish(null), 5000);
       this.post({ type: 'rec', on: false });
-      setTimeout(() => {
-        const chunks = this.recChunks || [];
-        this.recChunks = null;
-        resolve(encodeWav(chunks, this.ctx.sampleRate));
-      }, 150);
     });
   }
-}
 
-function encodeWav(chunks, sr) {
-  let total = 0;
-  for (const c of chunks) total += c.length;
-  const frames = total >> 1;
-  const buf = new ArrayBuffer(44 + frames * 4);
-  const v = new DataView(buf);
-  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  str(0, 'RIFF'); v.setUint32(4, 36 + frames * 4, true); str(8, 'WAVE');
-  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
-  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true);
-  str(36, 'data'); v.setUint32(40, frames * 4, true);
-  let o = 44;
-  for (const c of chunks) {
-    for (let i = 0; i < c.length; i++) {
-      const s = Math.max(-1, Math.min(1, c[i]));
-      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      o += 2;
+  onRecMessage(msg) {
+    const rec = this.rec;
+    if (!rec || msg.id !== rec.id) return;
+    if (msg.type === 'rec') {
+      if (msg.seq !== rec.nextSeq) rec.gaps++;
+      rec.nextSeq = msg.seq + 1;
+      rec.chunks.push(msg.data);
+      rec.samples += msg.data.length;
+    } else if (msg.type === 'recDone' && rec.done) {
+      if (msg.chunks !== rec.nextSeq) rec.gaps++;
+      rec.done(msg);
     }
   }
-  return new Blob([buf], { type: 'audio/wav' });
 }
